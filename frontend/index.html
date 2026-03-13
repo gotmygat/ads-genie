@@ -13,26 +13,40 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div class="shell">
+
+    <nav class="top-nav">
+      <div class="nav-brand">
+        <div class="brand-mark">AG</div>
+        <span class="brand-name">Ads Genie</span>
+        <span class="beta-pill">beta</span>
+      </div>
+      <div class="nav-tabs">
+        <button class="nav-tab active" data-page="alerts">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+          Alerts
+        </button>
+        <button class="nav-tab" data-page="campaigns">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          Campaign Builder
+        </button>
+      </div>
+      <span id="monitoringStatus" class="status-pill live">
+        <span class="status-dot"></span>
+        Monitoring live
+      </span>
+    </nav>
+
+    <div class="shell" data-page="alerts">
+
       <aside class="rail">
         <div class="brand-block">
-          <div class="brand-mark">AG</div>
-          <div>
-            <p class="brand-kicker">Ads Genie</p>
-            <h1>Command Center</h1>
-          </div>
-          <span class="beta-pill">beta</span>
-        </div>
-
-        <div class="rail-section-head">
-          <span>Accounts</span>
-          <button id="runMonitoringBtn" class="ghost-btn">Run now</button>
+          <span class="rail-section-label">Accounts</span>
+          <button id="runMonitoringBtn" class="ghost-btn small">Run now</button>
         </div>
         <div id="accountRail" class="account-rail"></div>
-
         <div class="rail-footer">
           <div class="footer-row">
-            <span>Accounts monitored</span>
+            <span>Monitored</span>
             <strong id="accountsMonitored">0</strong>
           </div>
           <div class="footer-row muted">
@@ -49,8 +63,6 @@
             <h2 id="selectedAccountTitle">Ads Genie</h2>
           </div>
           <div class="header-actions">
-            <span id="monitoringStatus" class="status-pill live">Monitoring live</span>
-            <button id="generateDraftBtn" class="primary-btn">Generate draft</button>
             <button id="generateWeeklyBtn" class="ghost-btn">Refresh report</button>
           </div>
         </header>
@@ -63,9 +75,7 @@
               <p class="section-kicker">Active Alerts</p>
               <h3>Decision queue</h3>
             </div>
-            <div class="queue-summary">
-              <span id="queueSummary">0 pending · 0 approved</span>
-            </div>
+            <span id="queueSummary" class="queue-summary">0 pending &middot; 0 approved</span>
           </div>
           <div id="alertFeed" class="alert-feed"></div>
         </section>
@@ -76,7 +86,7 @@
               <p class="section-kicker">Portfolio View</p>
               <h3>Weekly MCC report</h3>
             </div>
-            <button id="loadWeeklyBtn" class="ghost-btn">Load latest</button>
+            <button id="loadWeeklyBtn" class="ghost-btn small">Load latest</button>
           </div>
           <div id="weeklyReport" class="weekly-report"></div>
         </section>
@@ -88,10 +98,14 @@
             <p class="section-kicker">Campaign Builder / Review</p>
             <h3 id="inspectorTitle">Select an alert or generate a draft</h3>
           </div>
-          <button id="refreshSelectedBtn" class="ghost-btn small">Refresh</button>
+          <div class="inspector-head-actions">
+            <button id="generateDraftBtn" class="primary-btn small">Generate draft</button>
+            <button id="refreshSelectedBtn" class="ghost-btn small">Refresh</button>
+          </div>
         </div>
         <div id="inspectorBody" class="inspector-body"></div>
       </aside>
+
     </div>
 
     <script type="module" src="/app.js"></script>
