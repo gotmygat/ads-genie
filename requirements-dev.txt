@@ -1,0 +1,7 @@
+pytest
+pytest-asyncio
+pytest-mock
+moto[dynamodb,s3,stepfunctions]>=5.0.0
+black
+ruff
+mypy

@@ -1,0 +1,283 @@
+FILE: /Users/kalhawari/Documents/Ads Genie/Ads-Genie-Implementation-Plan.pdf
+2026-03-10 18:19:53.534 osascript[16041:2081279] Error received in message reply handler: Connection invalid
+2026-03-10 18:19:53.534 osascript[16041:2081280] Connection Invalid error for service com.apple.hiservices-xpcservice.
+PAGES: 11
+
+--- PAGE 1 ---
+Ads Genie: Implementation
+Plan
+Prepared for: Render Analytics
+Prepared by: Chris Morancie — Fractional CTO / AI Architect
+Date: March 2026
+DRAFT — FOR DISCUSSION
+
+--- PAGE 2 ---
+Overview
+This plan translates the architecture recommendations from the companion Architecture Review into a buildable roadmap. The
+system is built in three layers, delivered across six two-week sprints.
+260
+3
+Total Dev Hours
+Layers
+Estimated development effort across all phases
+MCP Server → Orchestration → Slack Control Plane
+
+--- PAGE 3 ---
+Build Summary
+Six build phases spanning the full system, from API integration to market validation.
+Phase What Gets Built Dev Hours Kal's Role
+Layer 1: Custom MCP
+Server
+Layer 2: Event-Driven
+Orchestration
+Layer 3: Slack Control
+Plane
+Memory & Reporting Campaign Builder &
+Write Actions
+Expand & Validate Google Ads API wrapper (OAuth, GAQL,
+caching, rate limiting). 5 core MCP tools:
+health_check, analyze_budget_waste,
+diagnose_roas_drop, search_terms_audit,
+benchmark_account. Each tool encodes
+Render's methodology, not raw queries.
+EventBridge schedules (hourly health checks,
+Monday reports). Step Functions anomaly
+response workflow (detect → analyze →
+recommend → approve → execute → log).
+DynamoDB account registry with per-client
+autonomy config. Decision log table.
+Slack bot (Bolt SDK, Socket Mode). Interactive
+alert messages with Approve/Modify/Dismiss
+buttons. Task token bridge (Slack approval →
+Step Functions continues). On-demand query
+support (@adsgenie in client channels). Per-
+client channel isolation.
+Decision memory (immutable audit trail per
+action). Client context memory (seasonal
+patterns, constraints, past outcomes).
+Automated weekly MCC report (Monday 8am).
+Per-client monthly reports.
+draft_campaign MCP tool (STAG methodology,
+vertical defaults). Write action tools (add
+negatives, pause/enable ad groups, adjust
+bids). All mutations gated by graduated
+autonomy, nothing executes without the right
+approval level.
+5 additional MCP tools (competitor analysis,
+landing page audit, keyword expansion, ad
+copy performance, pacing). 4 weeks of daily
+use validation. Cost model tracking.
+60 hrs. Define thresholds,
+playbooks, waste
+definitions, and vertical
+benchmarks. This is the
+knowledge the tools
+encode.
+50 hrs. Define severity
+thresholds, autonomy
+levels per action type,
+alert frequency limits,
+weekly report format.
+40 hrs. Test alert quality — are
+they actionable or noisy?
+Validate the full loop:
+alert → approve → action
+→ confirmation.
+40 hrs. Define report format.
+Validate that memory
+context improves agent
+reasoning.
+40 hrs. Review every draft
+campaign the system
+produces. Tune
+autonomy levels based
+on trust.
+30 hrs. Daily use for 4 weeks.
+Track signal-to-noise
+ratio, time saved,
+accuracy. Go/no-go on
+market version.
+
+--- PAGE 4 ---
+Architecture Principles
+Every decision in this plan maps to the AI Production Framework. Five core principles govern how the system is designed and
+operated.
+Probabilistic reasoning
+inside deterministic
+infrastructure
+The LLM picks tools and interprets
+results. Step Functions owns the
+workflow. MCP tools execute
+Render's logic exactly.
+Routing is infrastructure, not
+AI
+EventBridge routes events.
+Autonomy levels determine approval
+paths. The LLM does not decide its
+own permissions.
+Every decision must be
+replayable
+Full context logging; prompt, tool
+calls, inputs, outputs, human
+decision, timestamp. Immutable
+audit trail.
+Identity and permissions are
+architectural
+Non-human identity per Lambda.
+Least privilege. Secrets Manager for
+all credentials. No shared keys.
+Human authority is
+designed, not assumed
+HITL is a Step Functions wait state +
+task token, not a prompt instruction.
+Autonomy levels stored in
+DynamoDB, enforced by
+infrastructure.
+
+--- PAGE 5 ---
+Delivery Timeline
+Six sprints across three architectural layers, each building on the last.
+Milestone 1
+1
+MCP Server Core
+Google Ads API wrapper, OAuth, GAQL, caching, rate
+limiting. First 5 MCP tools live. 2 Milestone 2
+Orchestration Layer
+EventBridge schedules, Step Functions workflow,
+DynamoDB registry. Anomaly detection pipeline.
+Milestone 3
+3
+Slack Control Plane
+Bolt SDK bot, interactive alerts, task token bridge, per-
+client channel isolation. 4 Milestone 4
+Milestone 5
+5
+Memory & Reporting
+Decision memory, client context memory, weekly MCC
+reports, monthly per-client reports.
+Campaign Builder
+draft_campaign tool, write actions (negatives, bids, ad
+groups), graduated autonomy gates. 6 Milestone 6
+Expand & Validate
+5 additional tools, 4 weeks daily use, cost tracking,
+go/no-go decision.
+
+--- PAGE 6 ---
+Technology Stack
+A fully cloud-native, Python-first stack built on AWS infrastructure with Claude as the reasoning engine.
+Component T echnology
+Custom MCP Server Python (MCP SDK or FastAPI)
+Google Ads API Python client library (v18+)
+LLM Claude API (Sonnet for standard,
+Opus for complex diagnosis)
+Orchestration AWS Step Functions
+Scheduling / Events Amazon EventBridge
+Compute AWS Lambda
+Component T echnology
+Database Amazon DynamoDB
+Slack Bot Slack Bolt SDK (Python)
+Audit Logs S3 with Object Lock
+Secrets AWS Secrets Manager
+Observability CloudWatch + X-Ray
+IaC AWS CDK (Python)
+
+--- PAGE 7 ---
+Security Architecture
+Security is not bolted on, it is designed into every layer of the system from
+day one.
+Three-Point AI Firewall
+Validate inbound (Slack
+messages), outbound (LLM-
+proposed actions against
+autonomy config), and external
+(Google Ads API responses)
+before any processing occurs.
+Separate IAM Roles
+Distinct roles for the monitoring
+Lambda, action-execution
+Lambda, and Slack handler.
+Least-privilege enforced at the
+infrastructure level, not by
+convention.
+Zero Hardcoded Secrets
+All credentials; Google OAuth, Slack tokens, Claude API key are stored
+in AWS Secrets Manager. No secrets in code, environment variables, or
+configuration files.
+
+--- PAGE 8 ---
+Cost Estimate — Internal Use
+Lean infrastructure costs make this profitable from the very first client at Solo tier pricing.
+Item Monthly Cost
+Claude API (Sonnet + Opus) AWS (Lambda, Step Functions, DynamoDB, EventBridge, S3) ~$70–140
+~$15–30
+Total ~$85–170/month
+Low Estimate ($) High Estimate ($)
+Cost Item
+Claude API
+AWS Infrastructure
+Total Monthly
+0 20 40 60 80 100 120 140 160 180
+
+--- PAGE 9 ---
+Key Risks & Mitigations
+Five identified risks with concrete mitigation strategies built into the plan from the start.
+Risk Mitigation
+Google Ads Developer Token delay MCP tools don't match Kal's judgment Alert fatigue Claude API cost creep Scope creep to market too early Apply immediately. Basic access is fast. Standard access takes longer. Early
+phases are read-only anyway, so development is not blocked.
+Golden dataset testing against 10 real accounts. Iterate until tool outputs match
+manual analysis before moving to production use.
+Start conservative. Configurable thresholds, deduplication, quiet hours. Alert
+less, not more with a focus on quality over quantity from day one.
+Per-call tracking from day one. Model cascade (Sonnet first, Opus only for
+complex diagnosis). Monthly budget caps enforced at infrastructure level.
+Internal milestone gate: 4 weeks daily use and greater than 80% alert accuracy
+required before any market discussion begins.
+
+--- PAGE 10 ---
+Success Criteria
+Three milestone gates define what "done" looks like at each phase of the build.
+MCP Server Live
+MCP server running. Kal querying
+real accounts via Claude Desktop.
+Tool outputs matching manual
+analysis on golden dataset accounts.
+Always-On Monitoring
+Always-on monitoring live. Slack
+alerts with approval workflow
+functional. Weekly reports generating
+automatically every Monday at 8am.
+Go/No-Go Decision
+Campaign builder working. Write
+actions executing through approvals.
+4 weeks of daily use data collected.
+Go/no-go decision on market version
+made with full data.
+
+--- PAGE 11 ---
+Built on the AI Production Framework
+10 pillars. 3 layers. 140+ principles for production-grade AI systems.
+This implementation plan is a companion document to the Architecture Review. Every build decision, every infrastructure choice,
+and every security control in this plan traces back to a specific principle in the AI Production Framework, ensuring that Ads Genie is
+not just functional, but production-grade from day one.
+Deterministic
+Infrastructure
+Step Functions,
+EventBridge, and
+DynamoDB own all
+workflow logic
+Human-in-the-Loop
+by Design
+Approval gates are
+infrastructure wait states,
+not prompt instructions
+Full Auditability
+Every action logged with
+full context; immutable,
+replayable, reviewable
+Graduated
+Autonomy
+Trust is earned
+incrementally. Nothing
+executes without the right
+approval level
+P r e p a r e d b y C h r i s M o r a n c i e · M a r c h 2 0 2 6

@@ -1,0 +1,215 @@
+{
+  "Comment": "Ads Genie anomaly response workflow",
+  "StartAt": "DetectAnomaly",
+  "States": {
+    "DetectAnomaly": {
+      "Type": "Pass",
+      "Next": "RunDiagnosis"
+    },
+    "RunDiagnosis": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${AnalysisRunnerLambdaArn}",
+        "Payload.$": "$"
+      },
+      "OutputPath": "$.Payload",
+      "Retry": [{
+        "ErrorEquals": ["States.ALL"],
+        "IntervalSeconds": 2,
+        "BackoffRate": 2.0,
+        "MaxAttempts": 3
+      }],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "LogFailure"}],
+      "Next": "BuildRecommendation"
+    },
+    "BuildRecommendation": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${RecommendationBuilderLambdaArn}",
+        "Payload.$": "$"
+      },
+      "OutputPath": "$.Payload",
+      "Retry": [{
+        "ErrorEquals": ["States.ALL"],
+        "IntervalSeconds": 2,
+        "BackoffRate": 2.0,
+        "MaxAttempts": 3
+      }],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "LogFailure"}],
+      "Next": "RouteByAutonomyLevel"
+    },
+    "RouteByAutonomyLevel": {
+      "Type": "Choice",
+      "Choices": [
+        {"Variable": "$.autonomy_level", "StringEquals": "auto_execute", "Next": "ExecuteAction"},
+        {"Variable": "$.autonomy_level", "StringEquals": "propose_and_wait", "Next": "SendSlackAlert"},
+        {"Variable": "$.autonomy_level", "StringEquals": "draft_and_review", "Next": "CreateDraft"},
+        {"Variable": "$.autonomy_level", "StringEquals": "escalate", "Next": "EscalateToKal"}
+      ],
+      "Default": "EscalateToKal"
+    },
+    "ExecuteAction": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ActionExecutorLambdaArn}",
+        "Payload.$": "$"
+      },
+      "OutputPath": "$.Payload",
+      "Retry": [{
+        "ErrorEquals": ["States.ALL"],
+        "IntervalSeconds": 2,
+        "BackoffRate": 2.0,
+        "MaxAttempts": 3
+      }],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "LogFailure"}],
+      "Next": "LogDecision"
+    },
+    "SendSlackAlert": {
+      "Type": "Pass",
+      "ResultPath": "$.approval_request",
+      "Result": {"mode": "approval"},
+      "Next": "WaitForApproval"
+    },
+    "WaitForApproval": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+      "TimeoutSeconds": 86400,
+      "Parameters": {
+        "FunctionName": "${SlackAlertLambdaArn}",
+        "Payload": {
+          "task_token.$": "$$.Task.Token",
+          "context.$": "$"
+        }
+      },
+      "ResultPath": "$.approval_result",
+      "Retry": [{
+        "ErrorEquals": ["States.ALL"],
+        "IntervalSeconds": 2,
+        "BackoffRate": 2.0,
+        "MaxAttempts": 3
+      }],
+      "Catch": [
+        {"ErrorEquals": ["States.Timeout"], "Next": "LogExpired"},
+        {"ErrorEquals": ["States.ALL"], "Next": "LogFailure"}
+      ],
+      "Next": "ApprovedOrModified"
+    },
+    "ApprovedOrModified": {
+      "Type": "Choice",
+      "Choices": [
+        {"Variable": "$.approval_result.decision", "StringEquals": "approved", "Next": "ExecuteAction"},
+        {"Variable": "$.approval_result.decision", "StringEquals": "modified", "Next": "ExecuteModifiedAction"},
+        {"Variable": "$.approval_result.decision", "StringEquals": "dismissed", "Next": "LogDismissal"}
+      ],
+      "Default": "LogDismissal"
+    },
+    "ExecuteModifiedAction": {
+      "Type": "Pass",
+      "Parameters": {
+        "customer_id.$": "$.customer_id",
+        "account_name.$": "$.account_name",
+        "vertical.$": "$.vertical",
+        "slack_channel_id.$": "$.slack_channel_id",
+        "action_type.$": "$.action_type",
+        "execution_arn.$": "$.execution_arn",
+        "modified_action.$": "$.approval_result.modification",
+        "decision": "approved"
+      },
+      "Next": "ExecuteAction"
+    },
+    "LogDismissal": {
+      "Type": "Pass",
+      "Parameters": {
+        "customer_id.$": "$.customer_id",
+        "action_type.$": "$.action_type",
+        "human_decision": "dismissed",
+        "recommended_action.$": "$",
+        "tool_call_inputs.$": "$",
+        "tool_call_outputs": {"status": "dismissed"},
+        "execution_arn.$": "$.execution_arn"
+      },
+      "Next": "LogDecision"
+    },
+    "LogExpired": {
+      "Type": "Pass",
+      "Parameters": {
+        "customer_id.$": "$.customer_id",
+        "action_type.$": "$.action_type",
+        "human_decision": "expired",
+        "recommended_action.$": "$",
+        "tool_call_inputs.$": "$",
+        "tool_call_outputs": {"status": "expired"},
+        "execution_arn.$": "$.execution_arn"
+      },
+      "Next": "NotifyExpiry"
+    },
+    "NotifyExpiry": {
+      "Type": "Pass",
+      "Next": "LogDecision"
+    },
+    "CreateDraft": {
+      "Type": "Pass",
+      "Result": {"mode": "draft"},
+      "Next": "SendDraftToSlack"
+    },
+    "SendDraftToSlack": {
+      "Type": "Pass",
+      "Next": "WaitForReview"
+    },
+    "WaitForReview": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+      "TimeoutSeconds": 259200,
+      "Parameters": {
+        "FunctionName": "${SlackDraftLambdaArn}",
+        "Payload": {
+          "task_token.$": "$$.Task.Token",
+          "context.$": "$"
+        }
+      },
+      "ResultPath": "$.review_result",
+      "Retry": [{
+        "ErrorEquals": ["States.ALL"],
+        "IntervalSeconds": 2,
+        "BackoffRate": 2.0,
+        "MaxAttempts": 3
+      }],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "LogFailure"}],
+      "Next": "LogDecision"
+    },
+    "EscalateToKal": {
+      "Type": "Pass",
+      "Next": "LogDecision"
+    },
+    "LogDecision": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${DecisionLoggerLambdaArn}",
+        "Payload.$": "$"
+      },
+      "OutputPath": "$.Payload",
+      "Retry": [{
+        "ErrorEquals": ["States.ALL"],
+        "IntervalSeconds": 2,
+        "BackoffRate": 2.0,
+        "MaxAttempts": 3
+      }],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "LogFailure"}],
+      "End": true
+    },
+    "LogFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${DecisionLoggerLambdaArn}",
+        "Payload.$": "$"
+      },
+      "OutputPath": "$.Payload",
+      "End": true
+    }
+  }
+}

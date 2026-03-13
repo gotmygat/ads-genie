@@ -1,0 +1,16 @@
+{
+  "Comment": "Ads Genie reporting workflow",
+  "StartAt": "GenerateWeeklyReport",
+  "States": {
+    "GenerateWeeklyReport": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${WeeklyReportLambdaArn}",
+        "Payload.$": "$"
+      },
+      "OutputPath": "$.Payload",
+      "End": true
+    }
+  }
+}

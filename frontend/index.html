@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ads Genie Command Center</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="rail">
+        <div class="brand-block">
+          <div class="brand-mark">AG</div>
+          <div>
+            <p class="brand-kicker">Ads Genie</p>
+            <h1>Command Center</h1>
+          </div>
+          <span class="beta-pill">beta</span>
+        </div>
+
+        <div class="rail-section-head">
+          <span>Accounts</span>
+          <button id="runMonitoringBtn" class="ghost-btn">Run now</button>
+        </div>
+        <div id="accountRail" class="account-rail"></div>
+
+        <div class="rail-footer">
+          <div class="footer-row">
+            <span>Accounts monitored</span>
+            <strong id="accountsMonitored">0</strong>
+          </div>
+          <div class="footer-row muted">
+            <span>Last sync</span>
+            <strong id="lastSyncLabel">just now</strong>
+          </div>
+        </div>
+      </aside>
+
+      <main class="command-pane">
+        <header class="command-header">
+          <div>
+            <p id="selectedAccountMeta" class="section-kicker">No account selected</p>
+            <h2 id="selectedAccountTitle">Ads Genie</h2>
+          </div>
+          <div class="header-actions">
+            <span id="monitoringStatus" class="status-pill live">Monitoring live</span>
+            <button id="generateDraftBtn" class="primary-btn">Generate draft</button>
+            <button id="generateWeeklyBtn" class="ghost-btn">Refresh report</button>
+          </div>
+        </header>
+
+        <section id="metricCards" class="metric-grid"></section>
+
+        <section class="panel feed-panel">
+          <div class="panel-head">
+            <div>
+              <p class="section-kicker">Active Alerts</p>
+              <h3>Decision queue</h3>
+            </div>
+            <div class="queue-summary">
+              <span id="queueSummary">0 pending · 0 approved</span>
+            </div>
+          </div>
+          <div id="alertFeed" class="alert-feed"></div>
+        </section>
+
+        <section class="panel report-panel">
+          <div class="panel-head">
+            <div>
+              <p class="section-kicker">Portfolio View</p>
+              <h3>Weekly MCC report</h3>
+            </div>
+            <button id="loadWeeklyBtn" class="ghost-btn">Load latest</button>
+          </div>
+          <div id="weeklyReport" class="weekly-report"></div>
+        </section>
+      </main>
+
+      <aside class="inspector-pane">
+        <div class="panel-head inspector-head">
+          <div>
+            <p class="section-kicker">Campaign Builder / Review</p>
+            <h3 id="inspectorTitle">Select an alert or generate a draft</h3>
+          </div>
+          <button id="refreshSelectedBtn" class="ghost-btn small">Refresh</button>
+        </div>
+        <div id="inspectorBody" class="inspector-body"></div>
+      </aside>
+    </div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
