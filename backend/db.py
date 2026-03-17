@@ -205,6 +205,43 @@ class Database:
                     state_value TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS threshold_overrides (
+                    vertical TEXT PRIMARY KEY,
+                    roas_healthy REAL NOT NULL,
+                    cpa_target REAL NOT NULL,
+                    quality_score_min REAL NOT NULL,
+                    calibrated_at TEXT NOT NULL,
+                    source TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS runtime_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    level TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    details_json TEXT NOT NULL,
+                    account_id INTEGER,
+                    alert_id INTEGER,
+                    action_id INTEGER,
+                    request_id TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE SET NULL,
+                    FOREIGN KEY(alert_id) REFERENCES alerts(id) ON DELETE SET NULL,
+                    FOREIGN KEY(action_id) REFERENCES actions(id) ON DELETE SET NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS slack_messages (
+                    alert_id INTEGER PRIMARY KEY,
+                    account_id INTEGER NOT NULL,
+                    channel TEXT NOT NULL,
+                    message_ts TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE,
+                    FOREIGN KEY(alert_id) REFERENCES alerts(id) ON DELETE CASCADE
+                );
                 """
             )
             self._ensure_column("accounts", "data_source", "TEXT NOT NULL DEFAULT 'demo'")
@@ -917,6 +954,170 @@ class Database:
             DO UPDATE SET memory_value = excluded.memory_value, updated_at = excluded.updated_at
             """,
             (account_id, key, value, utc_now_iso()),
+        )
+
+    def get_threshold_override(self, vertical: str) -> dict[str, Any] | None:
+        return self.fetchone(
+            """
+            SELECT vertical, roas_healthy, cpa_target, quality_score_min, calibrated_at, source
+            FROM threshold_overrides
+            WHERE vertical = ?
+            """,
+            (vertical,),
+        )
+
+    def list_threshold_overrides(self) -> list[dict[str, Any]]:
+        return self.fetchall(
+            """
+            SELECT vertical, roas_healthy, cpa_target, quality_score_min, calibrated_at, source
+            FROM threshold_overrides
+            ORDER BY vertical ASC
+            """
+        )
+
+    def upsert_threshold_override(
+        self,
+        vertical: str,
+        roas_healthy: float,
+        cpa_target: float,
+        quality_score_min: float,
+        source: str,
+    ) -> None:
+        self.execute(
+            """
+            INSERT INTO threshold_overrides (
+                vertical, roas_healthy, cpa_target, quality_score_min, calibrated_at, source
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(vertical)
+            DO UPDATE SET
+                roas_healthy = excluded.roas_healthy,
+                cpa_target = excluded.cpa_target,
+                quality_score_min = excluded.quality_score_min,
+                calibrated_at = excluded.calibrated_at,
+                source = excluded.source
+            """,
+            (
+                vertical,
+                roas_healthy,
+                cpa_target,
+                quality_score_min,
+                utc_now_iso(),
+                source,
+            ),
+        )
+
+    def insert_runtime_event(
+        self,
+        level: str,
+        category: str,
+        message: str,
+        details: dict[str, Any],
+        account_id: int | None = None,
+        alert_id: int | None = None,
+        action_id: int | None = None,
+        request_id: str | None = None,
+    ) -> int:
+        cur = self.execute(
+            """
+            INSERT INTO runtime_events (
+                level, category, message, details_json, account_id, alert_id, action_id, request_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                level,
+                category,
+                message,
+                json.dumps(details),
+                account_id,
+                alert_id,
+                action_id,
+                request_id,
+                utc_now_iso(),
+            ),
+        )
+        return int(cur.lastrowid)
+
+    def list_runtime_events(
+        self,
+        level: str | None = None,
+        category: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        if level and category:
+            return self.fetchall(
+                """
+                SELECT id, level, category, message, details_json, account_id, alert_id, action_id, request_id, created_at
+                FROM runtime_events
+                WHERE level = ? AND category = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (level, category, limit),
+            )
+        if level:
+            return self.fetchall(
+                """
+                SELECT id, level, category, message, details_json, account_id, alert_id, action_id, request_id, created_at
+                FROM runtime_events
+                WHERE level = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (level, limit),
+            )
+        if category:
+            return self.fetchall(
+                """
+                SELECT id, level, category, message, details_json, account_id, alert_id, action_id, request_id, created_at
+                FROM runtime_events
+                WHERE category = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (category, limit),
+            )
+        return self.fetchall(
+            """
+            SELECT id, level, category, message, details_json, account_id, alert_id, action_id, request_id, created_at
+            FROM runtime_events
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+
+    def save_slack_message(
+        self,
+        alert_id: int,
+        account_id: int,
+        channel: str,
+        message_ts: str,
+        payload: dict[str, Any],
+    ) -> None:
+        now = utc_now_iso()
+        self.execute(
+            """
+            INSERT INTO slack_messages (alert_id, account_id, channel, message_ts, payload_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(alert_id)
+            DO UPDATE SET
+                account_id = excluded.account_id,
+                channel = excluded.channel,
+                message_ts = excluded.message_ts,
+                payload_json = excluded.payload_json,
+                updated_at = excluded.updated_at
+            """,
+            (alert_id, account_id, channel, message_ts, json.dumps(payload), now, now),
+        )
+
+    def get_slack_message(self, alert_id: int) -> dict[str, Any] | None:
+        return self.fetchone(
+            """
+            SELECT alert_id, account_id, channel, message_ts, payload_json, created_at, updated_at
+            FROM slack_messages
+            WHERE alert_id = ?
+            """,
+            (alert_id,),
         )
 
     def get_scheduler_state(self, key: str) -> str | None:

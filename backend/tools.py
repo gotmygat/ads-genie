@@ -65,6 +65,97 @@ class ToolEngine:
             "pacing": self.pacing,
         }
 
+    def benchmark_for_vertical(self, vertical: str) -> VerticalBenchmark:
+        override = self.db.get_threshold_override(vertical)
+        if override:
+            return VerticalBenchmark(
+                roas_healthy=float(override["roas_healthy"]),
+                cpa_target=float(override["cpa_target"]),
+                quality_score_min=float(override["quality_score_min"]),
+            )
+        return BENCHMARKS.get(vertical, VerticalBenchmark(2.5, 100, 6.0))
+
+    def list_thresholds(self) -> list[dict[str, Any]]:
+        verticals = sorted(set(BENCHMARKS) | {item["vertical"] for item in self.db.list_threshold_overrides()})
+        rows: list[dict[str, Any]] = []
+        for vertical in verticals:
+            base = BENCHMARKS.get(vertical, VerticalBenchmark(2.5, 100, 6.0))
+            override = self.db.get_threshold_override(vertical)
+            active = self.benchmark_for_vertical(vertical)
+            rows.append(
+                {
+                    "vertical": vertical,
+                    "active": {
+                        "roas_healthy": active.roas_healthy,
+                        "cpa_target": active.cpa_target,
+                        "quality_score_min": active.quality_score_min,
+                    },
+                    "default": {
+                        "roas_healthy": base.roas_healthy,
+                        "cpa_target": base.cpa_target,
+                        "quality_score_min": base.quality_score_min,
+                    },
+                    "override": override,
+                }
+            )
+        return rows
+
+    def calibrate_thresholds(self, vertical: str | None = None, apply: bool = False) -> dict[str, Any]:
+        accounts = self.db.list_accounts()
+        grouped: dict[str, list[int]] = {}
+        for account in accounts:
+            account_vertical = str(account["vertical"])
+            if vertical and account_vertical != vertical:
+                continue
+            grouped.setdefault(account_vertical, []).append(int(account["id"]))
+
+        suggestions: list[dict[str, Any]] = []
+        for group_vertical, account_ids in grouped.items():
+            roas_values: list[float] = []
+            cpa_values: list[float] = []
+            qs_values: list[float] = []
+            for account_id in account_ids:
+                metrics = self._account_metrics(account_id)
+                if metrics["roas_7d"] > 0:
+                    roas_values.append(float(metrics["roas_7d"]))
+                if metrics["cpa_7d"] > 0:
+                    cpa_values.append(float(metrics["cpa_7d"]))
+                if metrics["quality_avg"] > 0:
+                    qs_values.append(float(metrics["quality_avg"]))
+            if not roas_values and not cpa_values and not qs_values:
+                continue
+
+            roas_values.sort()
+            cpa_values.sort()
+            qs_values.sort()
+            roas_healthy = round(roas_values[max(0, len(roas_values) // 2 - 1)] if roas_values else 2.5, 3)
+            cpa_target = round(cpa_values[max(0, len(cpa_values) // 2 - 1)] if cpa_values else 100.0, 2)
+            quality_score_min = round(max(4.5, qs_values[max(0, len(qs_values) // 3 - 1)] if qs_values else 6.0), 2)
+            suggestion = {
+                "vertical": group_vertical,
+                "sample_account_count": len(account_ids),
+                "suggested": {
+                    "roas_healthy": roas_healthy,
+                    "cpa_target": cpa_target,
+                    "quality_score_min": quality_score_min,
+                },
+            }
+            if apply:
+                self.db.upsert_threshold_override(
+                    group_vertical,
+                    roas_healthy=roas_healthy,
+                    cpa_target=cpa_target,
+                    quality_score_min=quality_score_min,
+                    source="calibrated_from_local_accounts",
+                )
+            suggestions.append(suggestion)
+
+        return {
+            "vertical_filter": vertical,
+            "applied": apply,
+            "suggestions": suggestions,
+        }
+
     def list_tools(self) -> list[dict[str, Any]]:
         return [
             {
@@ -150,7 +241,7 @@ class ToolEngine:
         campaigns = snapshot.campaigns
         search_terms = snapshot.search_terms
         vertical = snapshot.account["vertical"]
-        benchmark = BENCHMARKS.get(vertical, VerticalBenchmark(2.5, 100, 6.0))
+        benchmark = self.benchmark_for_vertical(vertical)
 
         spend_7d = sum(float(c["spend_7d"]) for c in campaigns)
         spend_prev_7d = sum(float(c["spend_prev_7d"]) for c in campaigns)

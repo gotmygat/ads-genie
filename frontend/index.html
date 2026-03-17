@@ -13,6 +13,7 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
+    <div id="flashHost" class="flash-host"></div>
 
     <nav class="top-nav">
       <div class="nav-brand">
@@ -63,6 +64,7 @@
             <h2 id="selectedAccountTitle">Ads Genie</h2>
           </div>
           <div class="header-actions">
+            <button id="calibrateThresholdsBtn" class="ghost-btn">Calibrate thresholds</button>
             <button id="generateWeeklyBtn" class="ghost-btn">Refresh report</button>
           </div>
         </header>
@@ -88,6 +90,7 @@
             </div>
             <button id="loadWeeklyBtn" class="ghost-btn small">Load latest</button>
           </div>
+          <div id="systemStatus" class="system-status"></div>
           <div id="weeklyReport" class="weekly-report"></div>
         </section>
       </main>

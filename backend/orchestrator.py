@@ -9,6 +9,7 @@ import time
 
 from .actions import ActionExecutor
 from .db import ActionRecord, Database
+from .observability import RuntimeMonitor
 from .reports import ReportService
 from .slack_bridge import SlackBridge
 from .tools import ToolEngine
@@ -38,6 +39,7 @@ class Orchestrator:
         actions: ActionExecutor,
         reports: ReportService,
         slack: SlackBridge,
+        monitor: RuntimeMonitor,
         timezone_name: str,
     ) -> None:
         self.db = db
@@ -45,6 +47,7 @@ class Orchestrator:
         self.actions = actions
         self.reports = reports
         self.slack = slack
+        self.monitor = monitor
         self.timezone = ZoneInfo(timezone_name)
 
     def _max_severity(self, severities: list[str]) -> str:
@@ -91,40 +94,22 @@ class Orchestrator:
         roas_diag: dict[str, Any],
         negatives: dict[str, Any],
     ) -> list[dict[str, Any]]:
-        campaigns = self.tools.ads_adapter.fetch_account_snapshot(account_id).campaigns
+        snapshot = self.tools.ads_adapter.fetch_account_snapshot(account_id)
+        campaigns = snapshot.campaigns
+        search_terms = snapshot.search_terms
         recs: list[dict[str, Any]] = []
         is_live_account = str(account.get("data_source", "demo")).lower() == "live"
 
         candidate_keywords = negatives.get("keywords", [])[:8]
-
-        # Keep live-account write actions conservative until full mutation wiring is enabled.
-        if is_live_account:
-            if candidate_keywords and float(waste["components"]["irrelevant_term_spend"]) >= 80:
-                recs.append(
-                    {
-                        "action_type": "draft_campaign",
-                        "risk": "medium",
-                        "reason": "Live account: draft negative keywords for manual approval",
-                        "params": {
-                            "draft_type": "negative_keywords",
-                            "keywords": candidate_keywords,
-                            "note": "Apply these negatives directly in Google Ads until write mutations are enabled.",
-                        },
-                    }
-                )
-
-            roas_drop_pct = float(roas_diag["roas"]["drop_pct"])
-            if health["severity"] in {"high", "critical"} and roas_drop_pct >= 25:
-                draft = self.tools.draft_campaign(account_id, {"monthly_budget": 3000})
-                recs.append(
-                    {
-                        "action_type": "draft_campaign",
-                        "risk": "high",
-                        "reason": "Live account: draft campaign for manual execution",
-                        "params": draft,
-                    }
-                )
-            return recs
+        top_irrelevant_term = next(
+            (
+                term
+                for term in search_terms
+                if str(term.get("relevance", "")).lower() in {"irrelevant", "borderline"}
+                and float(term.get("conversions_7d", 0.0)) <= 0
+            ),
+            None,
+        )
 
         if candidate_keywords and float(waste["components"]["irrelevant_term_spend"]) >= 80:
             recs.append(
@@ -132,7 +117,18 @@ class Orchestrator:
                     "action_type": "add_negative_keywords",
                     "risk": "medium",
                     "reason": "Irrelevant search-term spend detected",
-                    "params": {"keywords": candidate_keywords},
+                    "params": {
+                        "keywords": candidate_keywords,
+                        "campaign_id": int(top_irrelevant_term["campaign_id"]) if top_irrelevant_term else None,
+                        "campaign_name": next(
+                            (
+                                c["name"]
+                                for c in campaigns
+                                if top_irrelevant_term and int(c["id"]) == int(top_irrelevant_term["campaign_id"])
+                            ),
+                            None,
+                        ),
+                    },
                 }
             )
 
@@ -185,11 +181,28 @@ class Orchestrator:
                 }
             )
 
+        if is_live_account and not recs:
+            draft = self.tools.draft_campaign(account_id, {"monthly_budget": 3000})
+            recs.append(
+                {
+                    "action_type": "draft_campaign",
+                    "risk": "high",
+                    "reason": "No safe live write identified; prepare manual review artifact",
+                    "params": draft,
+                }
+            )
+
         return recs
 
     def run_monitoring_cycle(self, account_id: int | None = None, triggered_by: str = "manual") -> dict[str, Any]:
         accounts = [self.db.get_account(account_id)] if account_id else self.db.list_accounts()
         accounts = [a for a in accounts if a]
+        self.monitor.emit(
+            "info",
+            "monitoring_cycle_start",
+            "Starting monitoring cycle",
+            details={"triggered_by": triggered_by, "account_id": account_id, "account_count": len(accounts)},
+        )
 
         cross_mcc = self.tools.cross_mcc_anomalies(0, {})
         created_alerts = 0
@@ -334,8 +347,17 @@ class Orchestrator:
                 payload={"alert_id": alert_id, "result": slack_result},
                 alert_id=alert_id,
             )
+            if not slack_result.get("ok"):
+                self.monitor.emit(
+                    "warning",
+                    "slack_notify_failed",
+                    "Slack notification failed",
+                    account_id=aid,
+                    alert_id=alert_id,
+                    details=slack_result,
+                )
 
-        return {
+        summary = {
             "ok": True,
             "triggered_by": triggered_by,
             "processed_accounts": len(accounts),
@@ -346,6 +368,8 @@ class Orchestrator:
             "cross_mcc_anomalies": cross_mcc,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+        self.monitor.emit("info", "monitoring_cycle_complete", "Monitoring cycle complete", details=summary)
+        return summary
 
     def apply_alert_decision(
         self,
@@ -378,16 +402,36 @@ class Orchestrator:
                 payload={"alert_id": alert_id},
                 alert_id=alert_id,
             )
+            self.monitor.emit(
+                "info",
+                "alert_dismissed",
+                "Alert dismissed",
+                account_id=account_id,
+                alert_id=alert_id,
+                details={"actor": actor},
+            )
             return {"ok": True, "alert_id": alert_id, "decision": "dismiss", "executed_actions": executed}
 
         # For modify, create replacement action when relevant.
         if decision == "modify":
             override_keywords = modifications.get("keywords")
             if override_keywords:
+                original_negative_action = next(
+                    (
+                        json.loads(raw["params_json"])
+                        for raw in alert_actions
+                        if str(raw["action_type"]) == "add_negative_keywords"
+                    ),
+                    {},
+                )
                 self.db.insert_action(
                     account_id=account_id,
                     action_type="add_negative_keywords",
-                    params={"keywords": list(override_keywords)},
+                    params={
+                        "keywords": list(override_keywords),
+                        "campaign_id": original_negative_action.get("campaign_id"),
+                        "campaign_name": original_negative_action.get("campaign_name"),
+                    },
                     status="pending",
                     reason="Human modification",
                     alert_id=alert_id,
@@ -424,6 +468,14 @@ class Orchestrator:
             action=decision,
             payload={"alert_id": alert_id, "modifications": modifications, "executed": executed},
             alert_id=alert_id,
+        )
+        self.monitor.emit(
+            "info",
+            "alert_decision_applied",
+            "Alert decision applied",
+            account_id=account_id,
+            alert_id=alert_id,
+            details={"decision": decision, "actor": actor, "executed_actions": executed, "modifications": modifications},
         )
 
         return {

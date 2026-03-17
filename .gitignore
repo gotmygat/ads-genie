@@ -8,3 +8,6 @@ node_modules/
 .venv/
 dist/
 *.zip
+client_secrets.json
+google-ads.yaml
+user_credentials.json

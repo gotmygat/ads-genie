@@ -8,6 +8,7 @@ from .actions import ActionExecutor
 from .ads_client import GoogleAdsAdapter
 from .config import load_settings
 from .db import Database
+from .observability import RuntimeMonitor, configure_logging
 from .orchestrator import Orchestrator
 from .reports import ReportService
 from .slack_bridge import SlackBridge
@@ -17,17 +18,19 @@ from .tools import ToolEngine
 class MCPStdioServer:
     def __init__(self) -> None:
         settings = load_settings()
+        configure_logging(settings.log_level)
         db = Database(settings.db_path)
         db.init_schema()
         if settings.auto_seed:
             db.seed_demo_data()
 
-        ads = GoogleAdsAdapter(settings, db)
+        monitor = RuntimeMonitor(db, service="ads-genie-mcp", environment=settings.environment)
+        ads = GoogleAdsAdapter(settings, db, monitor=monitor)
         tools = ToolEngine(db, ads)
         reports = ReportService(db, tools, settings.timezone)
-        actions = ActionExecutor(db)
-        slack = SlackBridge(settings)
-        orchestrator = Orchestrator(db, tools, actions, reports, slack, settings.timezone)
+        actions = ActionExecutor(db, ads, monitor)
+        slack = SlackBridge(settings, db, monitor)
+        orchestrator = Orchestrator(db, tools, actions, reports, slack, monitor, settings.timezone)
 
         self.db = db
         self.tools = tools

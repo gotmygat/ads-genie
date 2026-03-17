@@ -8,6 +8,7 @@ from backend.actions import ActionExecutor
 from backend.ads_client import GoogleAdsAdapter
 from backend.config import Settings
 from backend.db import Database
+from backend.observability import RuntimeMonitor
 from backend.orchestrator import Orchestrator
 from backend.reports import ReportService
 from backend.slack_bridge import SlackBridge
@@ -23,9 +24,14 @@ class AdsGenieSystemTest(unittest.TestCase):
             app_port=0,
             db_path=db_path,
             timezone="America/Toronto",
+            environment="test",
+            log_level="INFO",
             monitor_interval_seconds=300,
             enable_scheduler=False,
             auto_seed=True,
+            app_auth_enabled=False,
+            app_auth_username="admin",
+            app_auth_password="",
             google_ads_developer_token="",
             google_ads_client_id="",
             google_ads_client_secret="",
@@ -33,6 +39,7 @@ class AdsGenieSystemTest(unittest.TestCase):
             google_ads_login_customer_id="",
             google_ads_api_version="v22",
             slack_bot_token="",
+            slack_app_token="",
             slack_signing_secret="",
             slack_default_channel="",
             claude_api_key="",
@@ -41,16 +48,18 @@ class AdsGenieSystemTest(unittest.TestCase):
         self.db = Database(db_path)
         self.db.init_schema()
         self.db.seed_demo_data()
-        self.ads = GoogleAdsAdapter(self.settings, self.db)
+        self.monitor = RuntimeMonitor(self.db, service="ads-genie-test", environment="test")
+        self.ads = GoogleAdsAdapter(self.settings, self.db, monitor=self.monitor)
         self.tools = ToolEngine(self.db, self.ads)
-        self.actions = ActionExecutor(self.db)
+        self.actions = ActionExecutor(self.db, self.ads, self.monitor)
         self.reports = ReportService(self.db, self.tools, self.settings.timezone)
         self.orchestrator = Orchestrator(
             self.db,
             self.tools,
             self.actions,
             self.reports,
-            SlackBridge(self.settings),
+            SlackBridge(self.settings, self.db, self.monitor),
+            self.monitor,
             self.settings.timezone,
         )
 

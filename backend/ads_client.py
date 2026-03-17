@@ -12,6 +12,7 @@ import time
 
 from .config import Settings
 from .db import Database
+from .observability import RuntimeMonitor
 
 
 @dataclass
@@ -67,9 +68,10 @@ class GoogleAdsAdapter:
     - Otherwise, data comes from local SQLite demo cache.
     """
 
-    def __init__(self, settings: Settings, db: Database) -> None:
+    def __init__(self, settings: Settings, db: Database, monitor: RuntimeMonitor | None = None) -> None:
         self.settings = settings
         self.db = db
+        self.monitor = monitor
         self._token_lock = threading.RLock()
         self._token: str | None = None
         self._token_expiry_epoch: float = 0.0
@@ -157,6 +159,26 @@ class GoogleAdsAdapter:
             raise GoogleAdsAPIError(f"Google Ads API call failed ({exc.code}): {detail}") from exc
         except URLError as exc:
             raise GoogleAdsAPIError(f"Google Ads API call failed: {exc}") from exc
+
+    def _mutate(
+        self,
+        customer_id: str,
+        service_name: str,
+        operations: list[dict[str, Any]],
+        *,
+        validate_only: bool,
+    ) -> dict[str, Any]:
+        url = f"{self._api_base}/customers/{customer_id}/{service_name}:mutate"
+        payload = {
+            "operations": operations,
+            "validateOnly": validate_only,
+        }
+        return self._request_json(
+            method="POST",
+            url=url,
+            headers=self._ads_headers(),
+            payload=payload,
+        )
 
     def _search_stream(self, customer_id: str, query: str) -> list[dict[str, Any]]:
         url = f"{self._api_base}/customers/{customer_id}/googleAds:searchStream"
@@ -543,3 +565,134 @@ class GoogleAdsAdapter:
         except Exception as exc:
             # Never break monitoring for an account because live API fails.
             return self._fallback_snapshot(account, live_error=str(exc))
+
+    def add_campaign_negative_keywords(
+        self,
+        customer_id: str,
+        campaign_id: int,
+        keywords: list[str],
+        *,
+        validate_only: bool,
+    ) -> dict[str, Any]:
+        cid = _normalize_customer_id(customer_id)
+        if not keywords:
+            raise GoogleAdsAPIError("No negative keywords supplied")
+
+        operations = [
+            {
+                "create": {
+                    "campaign": f"customers/{cid}/campaigns/{int(campaign_id)}",
+                    "negative": True,
+                    "keyword": {
+                        "text": str(keyword).strip(),
+                        "matchType": "PHRASE",
+                    },
+                }
+            }
+            for keyword in keywords
+            if str(keyword).strip()
+        ]
+        if not operations:
+            raise GoogleAdsAPIError("No valid negative keywords supplied")
+        response = self._mutate(cid, "campaignCriteria", operations, validate_only=validate_only)
+        return {
+            "service": "campaignCriteria",
+            "validate_only": validate_only,
+            "operation_count": len(operations),
+            "response": response,
+        }
+
+    def pause_campaign(
+        self,
+        customer_id: str,
+        campaign_id: int,
+        *,
+        validate_only: bool,
+    ) -> dict[str, Any]:
+        cid = _normalize_customer_id(customer_id)
+        operations = [
+            {
+                "update": {
+                    "resourceName": f"customers/{cid}/campaigns/{int(campaign_id)}",
+                    "status": "PAUSED",
+                },
+                "updateMask": "status",
+            }
+        ]
+        response = self._mutate(cid, "campaigns", operations, validate_only=validate_only)
+        return {
+            "service": "campaigns",
+            "validate_only": validate_only,
+            "operation_count": 1,
+            "response": response,
+        }
+
+    def _load_bid_adjustable_ad_groups(self, customer_id: str, campaign_id: int) -> list[dict[str, Any]]:
+        cid = _normalize_customer_id(customer_id)
+        query = (
+            "SELECT ad_group.id, ad_group.name, ad_group.cpc_bid_micros, ad_group.status "
+            f"FROM ad_group WHERE campaign.id = {int(campaign_id)} "
+            "AND ad_group.status = 'ENABLED'"
+        )
+        rows = self._search_stream(cid, query)
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            ad_group = row.get("adGroup", {})
+            ad_group_id = _to_int(_get_nested(ad_group, "id", default=0))
+            cpc_bid_micros = _to_int(_get_nested(ad_group, "cpcBidMicros", "cpc_bid_micros", default=0))
+            if ad_group_id <= 0 or cpc_bid_micros <= 0:
+                continue
+            results.append(
+                {
+                    "id": ad_group_id,
+                    "name": str(_get_nested(ad_group, "name", default=f"Ad Group {ad_group_id}")),
+                    "cpc_bid_micros": cpc_bid_micros,
+                }
+            )
+        return results
+
+    def adjust_campaign_bids(
+        self,
+        customer_id: str,
+        campaign_id: int,
+        pct_delta: float,
+        *,
+        validate_only: bool,
+    ) -> dict[str, Any]:
+        cid = _normalize_customer_id(customer_id)
+        ad_groups = self._load_bid_adjustable_ad_groups(cid, campaign_id)
+        if not ad_groups:
+            raise GoogleAdsAPIError("No enabled ad groups with mutable CPC bids found for campaign")
+
+        operations: list[dict[str, Any]] = []
+        applied: list[dict[str, Any]] = []
+        multiplier = max(0.1, 1.0 + (float(pct_delta) / 100.0))
+        for item in ad_groups:
+            current = int(item["cpc_bid_micros"])
+            next_value = max(10_000, int(round(current * multiplier)))
+            operations.append(
+                {
+                    "update": {
+                        "resourceName": f"customers/{cid}/adGroups/{int(item['id'])}",
+                        "cpcBidMicros": next_value,
+                    },
+                    "updateMask": "cpc_bid_micros",
+                }
+            )
+            applied.append(
+                {
+                    "ad_group_id": int(item["id"]),
+                    "ad_group_name": item["name"],
+                    "before_cpc_bid_micros": current,
+                    "after_cpc_bid_micros": next_value,
+                }
+            )
+
+        response = self._mutate(cid, "adGroups", operations, validate_only=validate_only)
+        return {
+            "service": "adGroups",
+            "validate_only": validate_only,
+            "operation_count": len(operations),
+            "applied": applied,
+            "response": response,
+        }

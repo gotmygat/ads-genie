@@ -29,9 +29,14 @@ class Settings:
     app_port: int
     db_path: str
     timezone: str
+    environment: str
+    log_level: str
     monitor_interval_seconds: int
     enable_scheduler: bool
     auto_seed: bool
+    app_auth_enabled: bool
+    app_auth_username: str
+    app_auth_password: str
     google_ads_developer_token: str
     google_ads_client_id: str
     google_ads_client_secret: str
@@ -39,6 +44,7 @@ class Settings:
     google_ads_login_customer_id: str
     google_ads_api_version: str
     slack_bot_token: str
+    slack_app_token: str
     slack_signing_secret: str
     slack_default_channel: str
     claude_api_key: str
@@ -55,7 +61,11 @@ class Settings:
 
     @property
     def has_slack_credentials(self) -> bool:
-        return bool(self.slack_bot_token and self.slack_signing_secret)
+        return _is_real_secret(self.slack_bot_token) and _is_real_secret(self.slack_signing_secret)
+
+    @property
+    def auth_is_configured(self) -> bool:
+        return self.app_auth_enabled and bool(self.app_auth_username and _is_real_secret(self.app_auth_password))
 
 
 
@@ -82,9 +92,14 @@ def load_settings() -> Settings:
         app_port=int(os.getenv("APP_PORT", "8080")),
         db_path=os.getenv("DB_PATH", str(base_dir / "data" / "ads_genie.db")),
         timezone=os.getenv("APP_TIMEZONE", "America/Toronto"),
+        environment=os.getenv("APP_ENV", "local"),
+        log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
         monitor_interval_seconds=int(os.getenv("MONITOR_INTERVAL_SECONDS", "300")),
         enable_scheduler=_to_bool(os.getenv("ENABLE_SCHEDULER"), True),
         auto_seed=_to_bool(os.getenv("AUTO_SEED"), True),
+        app_auth_enabled=_to_bool(os.getenv("APP_AUTH_ENABLED"), False),
+        app_auth_username=os.getenv("APP_AUTH_USERNAME", "admin"),
+        app_auth_password=os.getenv("APP_AUTH_PASSWORD", ""),
         google_ads_developer_token=os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN", ""),
         google_ads_client_id=os.getenv("GOOGLE_ADS_CLIENT_ID", ""),
         google_ads_client_secret=os.getenv("GOOGLE_ADS_CLIENT_SECRET", ""),
@@ -92,6 +107,7 @@ def load_settings() -> Settings:
         google_ads_login_customer_id=os.getenv("GOOGLE_ADS_LOGIN_CUSTOMER_ID", ""),
         google_ads_api_version=os.getenv("GOOGLE_ADS_API_VERSION", "v22"),
         slack_bot_token=os.getenv("SLACK_BOT_TOKEN", ""),
+        slack_app_token=os.getenv("SLACK_APP_TOKEN", ""),
         slack_signing_secret=os.getenv("SLACK_SIGNING_SECRET", ""),
         slack_default_channel=os.getenv("SLACK_DEFAULT_CHANNEL", ""),
         claude_api_key=os.getenv("CLAUDE_API_KEY", ""),

@@ -5,6 +5,7 @@ const state = {
   decisions: [],
   actions: [],
   weeklyReport: null,
+  thresholds: [],
   selectedAccountId: null,
   selectedAlertId: null,
   selectedAccountDetail: null,
@@ -20,6 +21,7 @@ const el = {
   runMonitoringBtn: document.getElementById("runMonitoringBtn"),
   generateDraftBtn: document.getElementById("generateDraftBtn"),
   generateWeeklyBtn: document.getElementById("generateWeeklyBtn"),
+  calibrateThresholdsBtn: document.getElementById("calibrateThresholdsBtn"),
   loadWeeklyBtn: document.getElementById("loadWeeklyBtn"),
   refreshSelectedBtn: document.getElementById("refreshSelectedBtn"),
   accountsMonitored: document.getElementById("accountsMonitored"),
@@ -31,6 +33,8 @@ const el = {
   queueSummary: document.getElementById("queueSummary"),
   alertFeed: document.getElementById("alertFeed"),
   weeklyReport: document.getElementById("weeklyReport"),
+  systemStatus: document.getElementById("systemStatus"),
+  flashHost: document.getElementById("flashHost"),
   inspectorTitle: document.getElementById("inspectorTitle"),
   inspectorBody: document.getElementById("inspectorBody"),
   navTabs: document.querySelectorAll(".nav-tab"),
@@ -48,6 +52,17 @@ async function api(path, options = {}) {
     throw new Error(payload.error || `Request failed: ${response.status}`);
   }
   return payload;
+}
+
+function showFlash(message, tone = "info") {
+  if (!el.flashHost) return;
+  const node = document.createElement("div");
+  node.className = `flash ${tone}`;
+  node.textContent = message;
+  el.flashHost.appendChild(node);
+  setTimeout(() => {
+    node.remove();
+  }, 4200);
 }
 
 // ─── SELECTORS ─────────────────────────────────────────────────────────
@@ -148,13 +163,14 @@ async function loadHealth() {
 }
 
 async function loadDashboard() {
-  const [accountsPayload, alertsPayload, decisionsPayload, actionsPayload, weeklyPayload] =
+  const [accountsPayload, alertsPayload, decisionsPayload, actionsPayload, weeklyPayload, thresholdsPayload] =
     await Promise.all([
       api("/api/accounts"),
       api("/api/alerts"),
       api("/api/decisions"),
       api("/api/actions"),
       api("/api/reports/weekly/latest").catch(() => ({ report: null })),
+      api("/api/thresholds").catch(() => ({ thresholds: [] })),
     ]);
 
   state.accounts = accountsPayload.accounts || [];
@@ -162,6 +178,7 @@ async function loadDashboard() {
   state.decisions = decisionsPayload.decisions || [];
   state.actions = (actionsPayload.actions || []).map((a) => ({ ...a, params: a.params || {} }));
   state.weeklyReport = weeklyPayload.report || null;
+  state.thresholds = thresholdsPayload.thresholds || [];
   state.lastSyncAt = new Date().toISOString();
 
   if (!state.selectedAccountId && state.accounts.length) {
@@ -462,6 +479,31 @@ function inlineModify(alertId, cardEl) {
 // ─── RENDER: WEEKLY REPORT ───────────────────────────────────────────────
 
 function renderWeeklyReport() {
+  const runtime = state.health?.runtime || {};
+  const categories = (runtime.top_categories || []).slice(0, 3).map(([name, count]) => `${name} (${count})`).join(" · ");
+  el.systemStatus.innerHTML = `
+    <div class="system-card">
+      <h4>Google Ads</h4>
+      <strong>${state.health?.google_ads_configured ? "Configured" : "Demo mode"}</strong>
+      <p>Read path is ${state.health?.google_ads_configured ? "ready for live accounts" : "still using demo fallback"}.</p>
+    </div>
+    <div class="system-card">
+      <h4>Slack</h4>
+      <strong>${state.health?.slack_configured ? "Configured" : "Not configured"}</strong>
+      <p>Interactive approvals are ${state.health?.slack_configured ? "wired in backend" : "implemented but waiting on credentials"}.</p>
+    </div>
+    <div class="system-card">
+      <h4>Auth</h4>
+      <strong>${state.health?.auth_configured ? "Enabled" : "Open locally"}</strong>
+      <p>Turn on dashboard/API auth with APP_AUTH_ENABLED and APP_AUTH_PASSWORD.</p>
+    </div>
+    <div class="system-card">
+      <h4>Runtime</h4>
+      <strong>${runtime.event_count || 0} events</strong>
+      <p>${categories || "No recent runtime events logged."}</p>
+    </div>
+  `;
+
   if (!state.weeklyReport) {
     el.weeklyReport.innerHTML =
       '<div class="empty-card">No weekly report yet. Click refresh to generate one.</div>';
@@ -745,6 +787,7 @@ async function applyDecision(alertId, decision) {
     state.pendingDecisions.delete(alertId);
     await loadDashboard();
     render();
+    showFlash(`Alert ${decision === "approve" ? "approved" : "dismissed"}.`, "success");
   } catch (err) {
     // Revert optimistic update on error
     if (alertIndex !== -1 && prevStatus) {
@@ -760,6 +803,7 @@ async function applyDecision(alertId, decision) {
       errEl.textContent = err.message;
       card.appendChild(errEl);
     }
+    showFlash(err.message, "error");
   }
 }
 
@@ -788,6 +832,7 @@ async function generateDraft() {
     });
     state.draftPreview = payload.result;
     renderInspector();
+    showFlash("Draft generated.", "success");
   } finally {
     el.generateDraftBtn.disabled = false;
     el.generateDraftBtn.textContent = "Generate draft";
@@ -805,6 +850,7 @@ async function runMonitoring() {
     });
     await loadDashboard();
     render();
+    showFlash("Monitoring cycle completed.", "success");
   } finally {
     el.runMonitoringBtn.disabled = false;
     el.runMonitoringBtn.textContent = "Run now";
@@ -822,8 +868,30 @@ async function refreshWeeklyReport(forceGenerate = false) {
       state.weeklyReport = payload.report;
     }
     renderWeeklyReport();
+    showFlash("Weekly report refreshed.", "success");
   } finally {
     el.generateWeeklyBtn.disabled = false;
+  }
+}
+
+async function calibrateThresholds() {
+  el.calibrateThresholdsBtn.disabled = true;
+  el.calibrateThresholdsBtn.textContent = "Calibrating...";
+  try {
+    const payload = await api("/api/thresholds/calibrate", {
+      method: "POST",
+      body: JSON.stringify({ apply: true }),
+    });
+    state.thresholds = payload.thresholds || [];
+    await loadDashboard();
+    render();
+    const count = payload.result?.suggestions?.length || 0;
+    showFlash(`Calibrated ${count} vertical threshold set${count === 1 ? "" : "s"}.`, "success");
+  } catch (error) {
+    showFlash(error.message, "error");
+  } finally {
+    el.calibrateThresholdsBtn.disabled = false;
+    el.calibrateThresholdsBtn.textContent = "Calibrate thresholds";
   }
 }
 
@@ -848,6 +916,7 @@ function bindEvents() {
   el.runMonitoringBtn.addEventListener("click", runMonitoring);
   el.generateDraftBtn.addEventListener("click", generateDraft);
   el.generateWeeklyBtn.addEventListener("click", () => refreshWeeklyReport(true));
+  el.calibrateThresholdsBtn.addEventListener("click", calibrateThresholds);
   el.loadWeeklyBtn.addEventListener("click", () => refreshWeeklyReport(false));
   el.refreshSelectedBtn.addEventListener("click", async () => {
     el.refreshSelectedBtn.disabled = true;
@@ -872,4 +941,5 @@ async function init() {
 init().catch((error) => {
   el.alertFeed.innerHTML = `<div class="empty-card">${error.message}</div>`;
   el.inspectorBody.innerHTML = `<div class="empty-card">${error.message}</div>`;
+  showFlash(error.message, "error");
 });
