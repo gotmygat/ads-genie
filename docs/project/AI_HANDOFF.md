@@ -278,6 +278,18 @@ Validation for this cleanup:
 - `.venv/bin/pytest tests -q`
 - result: `25 passed`
 
+### Phase 10 - Stop tracking the local SQLite database
+
+User ask:
+- remove the tracked SQLite DB from version control and explain what that means
+
+What was done:
+1. added `data/*.db` to `.gitignore`
+2. removed `data/ads_genie.db` from Git tracking while leaving the local file usable on disk
+3. kept the runtime bootstrap model based on `Database.init_schema()` and `seed_demo_data()`
+4. documented that the SQLite DB is generated local state, not a source artifact
+5. retained the `data/` directory in the repo via `data/.gitkeep`
+
 ## Current Status Matrix
 
 ### Implemented enough to use locally
@@ -334,6 +346,7 @@ Relevant endpoints:
 
 - The local SQLite database is at `data/ads_genie.db`.
 - Do not casually reset or overwrite it without explicit user approval.
+- `data/ads_genie.db` is no longer intended to be tracked in Git; treat it as generated local state.
 - The user introduced Google OAuth helper files and local credentials-related artifacts through another AI pass. Treat those as intentional unless the user asks to remove them.
 - `client_secrets.json` must not be committed.
 

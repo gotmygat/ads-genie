@@ -84,7 +84,7 @@ infrastructure/  AWS CDK stacks and constructs
 memory/          Decision/context memory modules
 reports/         Weekly/monthly reporting modules
 tests/           Unit and integration tests
-data/            Local SQLite database
+data/            Local generated runtime data (SQLite is created on first run)
 docs/            Planning docs, extracted references, project notes
 scripts/         Helper scripts such as Google Ads OAuth tooling
 ```
@@ -106,7 +106,7 @@ Planning/reference material:
 ## Runtime Notes
 
 - The local app defaults to demo mode when Google Ads credentials are not configured.
-- The local SQLite database is tracked for now because the app was built around a seeded local demo flow.
+- The local SQLite database is generated at runtime and is no longer intended to be tracked in Git.
 - The production-oriented AWS/MCP path exists in code but is not the same thing as the local runnable app.
 - Vercel is not the natural deployment target for the current local runtime because it depends on a long-lived server process, local SQLite, and an in-process scheduler.
 

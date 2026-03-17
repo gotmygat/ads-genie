@@ -24,6 +24,7 @@ Each update must record:
 - [x] Add local Slack interactive approvals
 - [x] Add threshold override and local calibration support
 - [x] Clean up repository layout and shorten the GitHub-facing README
+- [x] Stop tracking the generated local SQLite database in Git
 
 ## Remaining Build Tasks
 - [ ] Validate live Google Ads write mutations against a real client account
@@ -39,6 +40,7 @@ Each update must record:
 - Never block the monitoring loop on provider/API failures; fallback safely.
 - `client_secrets.json` is intentionally ignored and must not be committed.
 - Do not casually reset `data/ads_genie.db` without user approval.
+- `data/ads_genie.db` is generated local state and should remain untracked.
 - The repo contains both a local runnable system and a separate production-oriented scaffold; do not confuse the two when reporting status.
 - Root-level clutter was reduced by moving support material into `docs/` and `scripts/`; keep new non-runtime material out of the repo root unless it is a standard root file.
 - Cleanup validation: `.venv/bin/pytest tests -q` passed with `25 passed`.

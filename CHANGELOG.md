@@ -12,6 +12,7 @@ This project is not formally versioned yet, so milestone-style version labels ar
 - Added a documentation-maintenance rule to the handoff/task-memory flow so future work updates the changelog, handoff, and next-task note together.
 - Added a consolidated implementation-history summary to the AI handoff document so another agent can continue without replaying the full thread.
 - Added `docs/README.md` as a documentation index so planning material, extracts, and project-memory files are grouped under a standard docs folder.
+- Added `data/.gitkeep` so the generated local-data directory remains in the repository without forcing a tracked SQLite database snapshot.
 
 ### Changed
 - Reorganized root-level repository clutter into `docs/` and `scripts/` to make the GitHub file tree look more like a conventional project repository.
@@ -22,6 +23,7 @@ This project is not formally versioned yet, so milestone-style version labels ar
 - Updated the handoff documentation to reflect the current reality of the codebase: a working local app plus a partially implemented production scaffold.
 - Updated task memory to include an explicit end-of-task note describing what to work on next.
 - Validated the repository cleanup with the existing test suite (`25 passed`).
+- Changed the local SQLite database from a tracked repository artifact into generated local state that should not be committed.
 
 ## [0.3.0] - 2026-03-17
 
