@@ -1,47 +1,59 @@
-# Ads Genie Handoff For Another AI
+# Ads Genie AI Handoff
 
-Use this file as the primary handoff document. It is meant to replace the need for full chat history.
+Use this document first when another AI continues work in this repository.
+It is the canonical summary of what the user asked for, what was implemented, what remains incomplete, and what the next AI should do next.
 
 ## Start Here
 
 Project root:
 - `/Users/kalhawari/Documents/Ads Genie`
 
-Primary handoff file:
-- `/Users/kalhawari/Documents/Ads Genie/AI_HANDOFF.md`
-
-Supporting files:
-- `/Users/kalhawari/Documents/Ads Genie/TASKS_LEFT.md`
-- `/Users/kalhawari/Documents/Ads Genie/README.md`
+Primary files to read first:
+1. `/Users/kalhawari/Documents/Ads Genie/AI_HANDOFF.md`
+2. `/Users/kalhawari/Documents/Ads Genie/TASKS_LEFT.md`
+3. `/Users/kalhawari/Documents/Ads Genie/CHANGELOG.md`
+4. `/Users/kalhawari/Documents/Ads Genie/README.md`
+5. `/Users/kalhawari/Documents/Ads Genie/backend/server.py`
+6. `/Users/kalhawari/Documents/Ads Genie/backend/db.py`
+7. `/Users/kalhawari/Documents/Ads Genie/backend/ads_client.py`
+8. `/Users/kalhawari/Documents/Ads Genie/backend/tools.py`
+9. `/Users/kalhawari/Documents/Ads Genie/backend/orchestrator.py`
+10. `/Users/kalhawari/Documents/Ads Genie/frontend/app.js`
 
 GitHub repo:
 - `https://github.com/gotmygat/ads-genie`
 
-Current branch:
+Branch:
 - `main`
 
-Latest important app/UI commit:
-- `7c5d3cf` - `feat: top nav tabs, inline modify, optimistic UI, loading states`
+Latest pushed commit at time of this handoff:
+- `7a1809e` - `feat: add auth, observability, slack approvals, and live write plumbing`
 
-## What The User Wants
+## Mandatory Documentation Maintenance Rule
 
-The user wants Ads Genie built end-to-end so it is genuinely functional:
-- backend
-- frontend
-- real Google Ads data
-- eventually safe real actions
+At the end of every completed task, update these three files together:
+- `/Users/kalhawari/Documents/Ads Genie/CHANGELOG.md`
+- `/Users/kalhawari/Documents/Ads Genie/AI_HANDOFF.md`
+- `/Users/kalhawari/Documents/Ads Genie/TASKS_LEFT.md`
 
-The user accepts placeholders for secrets and credentials, but does not want fake architecture-only output. The user prefers direct execution over planning-heavy responses.
+Each end-of-task update must include:
+- what changed
+- what was validated
+- what remains blocked
+- the exact next recommended task
+- who should pick it up next: `same AI` or `any AI`
 
-## What Was Built
+Do not leave those documents stale after making implementation changes.
 
-There are two parallel code paths in this repo:
+## Current Repo Reality
 
-### 1. Local runnable app
+This repository has two parallel implementation paths.
 
-This is what the user is actually opening in the browser.
+### 1. Local runnable system
 
-Files:
+This is the path the user actually opens in a browser today.
+
+Main files:
 - `/Users/kalhawari/Documents/Ads Genie/backend/server.py`
 - `/Users/kalhawari/Documents/Ads Genie/backend/db.py`
 - `/Users/kalhawari/Documents/Ads Genie/backend/ads_client.py`
@@ -52,14 +64,15 @@ Files:
 - `/Users/kalhawari/Documents/Ads Genie/frontend/app.js`
 
 Characteristics:
-- Runs locally on port `8080`
-- Uses SQLite at `/Users/kalhawari/Documents/Ads Genie/data/ads_genie.db`
-- Mixes seeded demo data with optional live Google Ads account imports
-- This is the current working demo/control-center UI
+- local HTTP server
+- SQLite-backed state
+- seeded demo accounts/alerts/history by default
+- optional live Google Ads connectivity when credentials are configured
+- currently the only dependable runtime path for user testing
 
-### 2. Production-oriented architecture scaffold
+### 2. Production-oriented scaffold
 
-Files/directories:
+Directories:
 - `/Users/kalhawari/Documents/Ads Genie/mcp_server`
 - `/Users/kalhawari/Documents/Ads Genie/orchestration`
 - `/Users/kalhawari/Documents/Ads Genie/slack_bot`
@@ -68,129 +81,244 @@ Files/directories:
 - `/Users/kalhawari/Documents/Ads Genie/reports`
 
 Characteristics:
-- More aligned to the architecture docs
-- Includes MCP-style tools, orchestration handlers, Slack scaffolding, and CDK scaffolds
-- Not fully deployed or fully validated end-to-end
+- more aligned with the architecture and implementation-plan docs
+- includes FastAPI MCP server, AWS Step Functions definitions, CDK stacks, Slack bot scaffolding, and deterministic tool modules
+- not fully deployed or validated end-to-end
 
-## What Is Real Vs Fake Right Now
+## User Goals Since Inception
+
+The user repeatedly asked for Ads Genie to be built as a genuinely functional system, not a fake architecture exercise.
+
+Core user requirements across the thread:
+- build the project end-to-end from backend to frontend
+- leave API keys as placeholders if needed, but make the system function locally
+- make the app runnable in the browser
+- keep memory of what tasks remain
+- connect real Google Ads data
+- support safe real Google Ads actions
+- use Slack as a real approval/control plane eventually
+- push work to GitHub
+- keep a useful handoff for another AI if the user runs low on tokens
+- document what is left and whether the original plan was truly implemented
+
+The user prefers direct execution over speculative planning.
+
+## Chronological Work Log
+
+### Phase 0 - Source documents supplied
+
+The user supplied high-level planning documents for architecture and implementation, including:
+- Ads Genie architecture review PDF
+- Ads Genie implementation plan PDF
+- Google API design documentation
+
+Those documents drove the intended shape of the repo.
+
+### Phase 1 - Initial full-stack build
+
+User ask:
+- build the entire project from beginning to end, backend to frontend, fully functioning where possible without secrets
+
+What was done:
+1. created the repository structure
+2. implemented the local backend in `backend/`
+3. implemented the local frontend in `frontend/`
+4. created the SQLite schema and seeded demo data
+5. added the deterministic tool engine
+6. added local orchestration and reporting
+7. added a Slack bridge
+8. added an MCP-style server path under `mcp_server/`
+9. added AWS-oriented scaffolding under `orchestration/`, `slack_bot/`, and `infrastructure/`
+10. added tests for the implemented core paths
+
+Main commit:
+- `523cf33` - `Build Ads Genie application stack`
+
+### Phase 2 - Local run support and browser access
+
+User ask:
+- run the server so the app can be opened in a browser
+
+What happened:
+1. local app was started multiple times
+2. there were repeated browser reachability issues because background processes launched from the agent environment were not always stable from the user’s browser session
+3. the local app path remained the working runtime for UI viewing once started correctly
+
+Important lesson for another AI:
+- the local app is reliable when run directly from the user’s environment, but agent-launched background servers may appear healthy to the agent while still being inaccessible to the user browser
+
+### Phase 3 - Task memory and Google Ads onboarding work
+
+User asks:
+- remember what tasks are left
+- explain how to connect Google Ads
+- clarify what campaign types the current tool supports
+
+What was done:
+1. created and updated `TASKS_LEFT.md`
+2. wired Google Ads read-path support in the local app
+3. documented the env vars and API endpoints needed to test live access
+4. clarified that advanced optimization support is strongest for Search while read-level visibility can span broader campaign types
+
+### Phase 4 - Master build prompt alignment and production-architecture scaffolding
+
+User ask:
+- align the repo to a detailed master build prompt describing MCP tools, AWS orchestration, Slack control plane, memory, reports, testing, and CDK deployment
+
+What was done:
+1. filled out `mcp_server/` with custom tool modules and write-action modules
+2. added DynamoDB/Secrets/GAQL-oriented auth/query/cache modules
+3. added orchestration Lambdas and Step Functions definitions
+4. added Slack bot handlers, message builders, and task-token bridge scaffolding
+5. added memory and reporting modules
+6. added CDK stacks
+7. added unit and integration tests around those paths
+
+Important reality check:
+- this work created substantial production-oriented code, but it did not fully replace the local runnable app as the active system
+
+### Phase 5 - UI direction changes and GitHub publishing
+
+User asks:
+- implement a more opinionated UI/control center
+- publish the repository to GitHub
+- clean up the git history and improve the README
+
+What was done:
+1. published the repo to `https://github.com/gotmygat/ads-genie`
+2. cleaned the branch history into a simpler linear story
+3. upgraded `README.md` into a real setup/deployment/operator guide
+4. later replaced the local frontend files with user-provided versions that introduced:
+   - top nav tabs
+   - inline modify
+   - optimistic UI behavior
+   - loading states
+
+Main commits:
+- `5712f15` - `Document setup and deployment workflow`
+- `7c5d3cf` - `feat: top nav tabs, inline modify, optimistic UI, loading states`
+
+### Phase 6 - Vercel diagnosis
+
+User ask:
+- determine why Vercel deployment failed
+
+What was found:
+1. Vercel could not discover a FastAPI entrypoint because the FastAPI app lived under `mcp_server/server.py` instead of an auto-detected path
+2. the local runnable app is not FastAPI at all; it is a custom `ThreadingHTTPServer`
+3. Vercel is not a good fit for the current local app because the active runtime uses:
+   - long-lived server process
+   - local SQLite persistence
+   - in-process scheduler thread
+
+Key conclusion:
+- the repo can be adapted for Vercel only after structural changes; it is currently better suited to a conventional host or AWS-oriented deployment
+
+### Phase 7 - Non-secret implementation pass
+
+User ask:
+- complete everything possible without requiring live keys, specifically:
+  - auth sessions / runtime events / Slack approvals / threshold overrides
+  - observability and logging
+  - dashboard/API auth
+  - Slack approvals end-to-end in the local backend
+  - real Google Ads write plumbing with preview/execute behavior
+  - threshold tuning/calibration support
+  - frontend updates as needed
+
+What was done:
+1. extended local configuration and SQLite schema for auth-related state, runtime events, Slack messages, and threshold overrides
+2. added `backend/observability.py`
+3. integrated structured runtime logging into server, actions, ads client, and orchestrator
+4. added optional local dashboard/API auth
+5. implemented signed Slack interactivity handling in the local backend
+6. added Google Ads live write paths for:
+   - campaign negative keywords
+   - campaign pause
+   - ad-group CPC bid adjustments for campaign-level bid actions
+7. added validate-first behavior before real mutation execution
+8. added threshold listing and local calibration support
+9. exposed the new operational status/calibration data in the frontend
+10. added/updated tests to keep the local path green
+
+Main commit:
+- `7a1809e` - `feat: add auth, observability, slack approvals, and live write plumbing`
+
+### Phase 8 - Architecture/plan cross-reference review
+
+User ask:
+- cross reference the repository against the original docs and determine whether the overall plan was actually implemented
+
+Verdict produced:
+- partially implemented, not fully implemented
+
+Reason:
+- the repo contains a substantial amount of the planned architecture in code
+- however, the active runnable runtime is still the local server + SQLite path
+- production Secrets Manager/DynamoDB/S3/Object Lock behavior is not the current live system
+- golden-account validation and final success gates are still incomplete
+- several planned tools remain placeholders in the active local path
+
+## Current Status Matrix
+
+### Implemented enough to use locally
+- local browser app
+- local monitoring/orchestration loop
+- account, alert, action, decision, report storage in SQLite
+- core deterministic tools in the local path
+- imported live Google Ads account reads
+- local alert decision handling
+- local dashboard/API auth
+- local observability/runtime-event logging
+- some real Google Ads write plumbing
+
+### Partially implemented
+- Slack end-to-end control plane
+- Google Ads real-client pilot support
+- production-oriented MCP server path
+- threshold tuning/calibration
+- campaign-builder flow
+- production deployment model
+
+### Still incomplete
+- golden dataset calibration against real accounts
+- live validation of Google Ads writes on a real client
+- live Slack workspace validation for interactive approvals
+- AWS deployment and runtime verification
+- production persistence replacing local SQLite for hosted use
+- full implementation of every planned tool in the local active path
+
+## Real vs Demo Data
 
 ### Real-capable now
-
-These can work with real Google Ads data once credentials are configured:
-- Google Ads connection test
+These can use real Google Ads data when credentials are present and an account is imported:
+- connection test
 - listing accessible customers
-- importing one real account into the app
-- read-oriented analysis against that imported account
+- importing a live customer into the local app
+- campaign/account/search-term snapshot reads
+- tool outputs derived from imported live snapshots
+- selected live write actions
 
 Relevant endpoints:
 - `GET /api/google-ads/test`
 - `GET /api/google-ads/customers`
 - `POST /api/google-ads/import-account`
 
-### Still fake, demo, or partially simulated
+### Still mixed with demo/local state
+- default account list before live import
+- pre-seeded alerts and decisions
+- seeded reports/history
+- some recommendation/explanation flows
+- much of the visible dashboard when using the seeded DB only
 
-- seeded alerts in SQLite
-- seeded decisions/history in SQLite
-- a lot of dashboard content before live import
-- some orchestration/recommendation flows
-- Slack end-to-end production behavior
-- AWS production deployment path
-- fully trusted live write execution path
+## Important Local State Notes
 
-## Current Frontend State
+- The local SQLite database is at `/Users/kalhawari/Documents/Ads Genie/data/ads_genie.db`.
+- Do not casually reset or overwrite it without explicit user approval.
+- The user also introduced Google OAuth helper files and local credentials-related artifacts through another AI pass. Treat those as intentional unless the user asks to remove them.
+- `client_secrets.json` must not be committed.
 
-The user asked to replace the browser UI files with provided versions. That happened.
-
-Files replaced directly:
-- `/Users/kalhawari/Documents/Ads Genie/frontend/index.html`
-- `/Users/kalhawari/Documents/Ads Genie/frontend/styles.css`
-- `/Users/kalhawari/Documents/Ads Genie/frontend/app.js`
-
-Commit:
-- `7c5d3cf` - `feat: top nav tabs, inline modify, optimistic UI, loading states`
-
-UI intent:
-- top nav tabs
-- inline modify flow
-- optimistic UI
-- loading states
-
-## Important Context About Data
-
-The current UI should not be treated as fully real data.
-
-Why:
-- the local DB is seeded with demo accounts and demo alerts
-- live Google Ads import is optional and not yet the default state
-- some recommendations/alerts are generated locally from demo-like flows
-
-If another AI is asked "is the data real?", the correct answer is:
-- partially real-capable, but currently still heavily demo unless a live account is imported and demo noise is isolated
-
-## Minimum Work Needed To Test One Real Client
-
-This is the most important practical next step.
-
-1. Put real Google Ads credentials into:
-   - `/Users/kalhawari/Documents/Ads Genie/.env`
-
-2. Required values:
-   - `GOOGLE_ADS_DEVELOPER_TOKEN`
-   - `GOOGLE_ADS_CLIENT_ID`
-   - `GOOGLE_ADS_CLIENT_SECRET`
-   - `GOOGLE_ADS_REFRESH_TOKEN`
-   - `GOOGLE_ADS_MCC_CUSTOMER_ID`
-
-3. Restart:
-   - `python3 -m backend.server`
-
-4. Verify:
-   - `GET /api/google-ads/test`
-   - `GET /api/google-ads/customers`
-
-5. Import exactly one live account:
-   - `POST /api/google-ads/import-account`
-
-6. Prefer a clean test database or isolate demo data so the user can clearly distinguish real vs fake
-
-7. Validate read-path outputs against the actual Google Ads UI:
-   - health check
-   - budget waste
-   - ROAS diagnosis
-   - search terms audit
-
-8. Only after read verification, test one low-risk write action with approval and validation-first behavior
-
-## Recommended Next Engineering Task
-
-Prepare a clean one-client live pilot.
-
-Suggested order:
-1. back up existing SQLite DB
-2. either reset or isolate demo data
-3. connect real Google Ads credentials
-4. import one live client
-5. verify dashboard/account/campaign metrics against Google Ads UI
-6. test one safe write path
-
-## Why Vercel Failed
-
-The user tried Vercel deployment.
-
-Observed issue:
-- Vercel could not find a FastAPI entrypoint
-
-Correct explanation:
-- the FastAPI app exists at `/Users/kalhawari/Documents/Ads Genie/mcp_server/server.py`
-- Vercel was not finding it in its expected entrypoint locations
-- the local app the user actually runs is not even FastAPI; it is a long-running custom server in `/Users/kalhawari/Documents/Ads Genie/backend/server.py`
-
-Additional reasons this repo is not directly Vercel-ready as a full app:
-- long-running `ThreadingHTTPServer`
-- local SQLite persistence
-- in-process scheduler thread
-
-## Running The Current Local App
+## Running The Current App
 
 Command:
 ```bash
@@ -198,81 +326,39 @@ cd "/Users/kalhawari/Documents/Ads Genie"
 python3 -m backend.server
 ```
 
-URL:
+Default URL:
 - `http://127.0.0.1:8080`
 
-Important note:
-- starting it inside the agent sandbox was unreliable for browser reachability
-- running it outside the sandbox or directly from the user's terminal was more reliable
+Caveat:
+- agent-started background servers have sometimes looked healthy while remaining unreachable to the user browser; running directly in the user environment is more reliable
 
-## Files Another AI Should Read First
+## Remaining Work
 
-In this order:
+The current highest-value unfinished work is not more scaffolding. It is live validation.
 
-1. `/Users/kalhawari/Documents/Ads Genie/AI_HANDOFF.md`
-2. `/Users/kalhawari/Documents/Ads Genie/TASKS_LEFT.md`
-3. `/Users/kalhawari/Documents/Ads Genie/README.md`
-4. `/Users/kalhawari/Documents/Ads Genie/backend/server.py`
-5. `/Users/kalhawari/Documents/Ads Genie/backend/db.py`
-6. `/Users/kalhawari/Documents/Ads Genie/backend/ads_client.py`
-7. `/Users/kalhawari/Documents/Ads Genie/backend/tools.py`
-8. `/Users/kalhawari/Documents/Ads Genie/frontend/app.js`
+Primary remaining tasks:
+1. connect one real Google Ads client cleanly
+2. isolate or reduce demo noise in the local DB for a trustworthy pilot
+3. validate read-path outputs against the real Google Ads UI
+4. test one safe write action end-to-end on a real client
+5. validate Slack interactive approvals in a real workspace
+6. tune thresholds against real account behavior
+7. decide whether production deployment should target AWS-first instead of trying to force Vercel
 
-## Important Project History
+## Next Task Note
 
-### Earlier build work completed
+Recommended owner:
+- `any AI`
 
-- local backend API and UI
-- deterministic tool layer
-- SQLite schema and seeded data
-- orchestration layer
-- reports
-- Slack bridge scaffolding
-- MCP-style server
-- infrastructure scaffolds
+Exact next task:
+- prepare a one-client live pilot by isolating demo noise, verifying credentials, importing one live Google Ads account, and validating the read path against the real Google Ads UI
 
-### GitHub history cleanup completed
+Why this is next:
+- the repo already has enough local functionality that more abstract scaffolding yields diminishing returns
+- the biggest uncertainty is whether the implemented read/write behavior matches reality on a real account
 
-- history was cleaned and simplified earlier
-- README was upgraded to a real operator/deployment guide
-
-### Recent user-driven frontend replacement
-
-- the user later provided replacement frontend files
-- those were copied exactly over the previous frontend files
-- no reinterpretation or redesign was intended in that step
-
-## User Instructions Worth Preserving
-
-- do not over-explain
-- act directly when possible
-- user wants the app genuinely functional, not just architected
-- user may continue in another AI due to token limits
-- user asked that remaining tasks be remembered
-
-## Remaining High-Level Tasks
-
-These are the practical tasks still left:
-
-1. connect real Google Ads data fully for one client
-2. isolate/remove demo data for a clean pilot
-3. verify read-path accuracy against real account metrics
-4. test one safe write action with human approval
-5. wire real Slack interaction if desired
-6. choose proper deployment target
-7. only after that, harden toward production
-
-## Current Local File State To Be Aware Of
-
-As of this handoff:
-- `AI_HANDOFF.md` is a new local file
-- `data/ads_genie.db` may be locally modified from app runs
-
-Another AI should check `git status` before making changes.
-
-## Short Prompt To Give Another AI
-
-Use this if the user wants to continue elsewhere:
-
-> Open `/Users/kalhawari/Documents/Ads Genie/AI_HANDOFF.md` first. This repo has a runnable local app in `backend/` + `frontend/` and a separate production-oriented scaffold in `mcp_server/`, `orchestration/`, `slack_bot/`, and `infrastructure/`. The immediate goal is not architecture work; it is to get one real Google Ads client connected with minimal demo noise and validate the real read path in the current browser app.
-
+Success criteria for the next task:
+- one live account imported successfully
+- dashboard/account metrics clearly traceable to real Google Ads data
+- health check and budget-waste outputs manually spot-checked against Google Ads UI
+- one low-risk write action tested with validate-first behavior
