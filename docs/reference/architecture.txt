@@ -1,4 +1,4 @@
-FILE: /Users/kalhawari/Documents/Ads Genie/Ads-Genie-Architecture-Review-and-Strategic-Recommendations.pdf
+FILE: docs/planning/Ads-Genie-Architecture-Review-and-Strategic-Recommendations.pdf
 2026-03-10 18:19:53.356 osascript[16040:2081270] Error received in message reply handler: Connection invalid
 2026-03-10 18:19:53.356 osascript[16040:2081273] Connection Invalid error for service com.apple.hiservices-xpcservice.
 PAGES: 10

@@ -7,9 +7,10 @@ import subprocess
 import sys
 
 
-ROOT = Path(__file__).resolve().parent
-DEFAULT_CLIENT_SECRETS = ROOT / "client_secrets.json"
-TOKEN_HELPER = ROOT / "generate_user_credentials.py"
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parent.parent
+DEFAULT_CLIENT_SECRETS = REPO_ROOT / "client_secrets.json"
+TOKEN_HELPER = SCRIPT_DIR / "generate_user_credentials.py"
 
 
 def main() -> int:
@@ -19,7 +20,7 @@ def main() -> int:
 
     if not DEFAULT_CLIENT_SECRETS.exists():
         print(
-            "Missing client_secrets.json. Download your OAuth client secrets from Google Cloud and place it next to this script.",
+            "Missing client_secrets.json. Download your OAuth client secrets from Google Cloud and place it in the repository root or pass a custom path to the token helper.",
             file=sys.stderr,
         )
         return 1

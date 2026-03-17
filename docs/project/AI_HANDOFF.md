@@ -6,19 +6,19 @@ It is the canonical summary of what the user asked for, what was implemented, wh
 ## Start Here
 
 Project root:
-- `/Users/kalhawari/Documents/Ads Genie`
+- `ads-genie`
 
 Primary files to read first:
-1. `/Users/kalhawari/Documents/Ads Genie/AI_HANDOFF.md`
-2. `/Users/kalhawari/Documents/Ads Genie/TASKS_LEFT.md`
-3. `/Users/kalhawari/Documents/Ads Genie/CHANGELOG.md`
-4. `/Users/kalhawari/Documents/Ads Genie/README.md`
-5. `/Users/kalhawari/Documents/Ads Genie/backend/server.py`
-6. `/Users/kalhawari/Documents/Ads Genie/backend/db.py`
-7. `/Users/kalhawari/Documents/Ads Genie/backend/ads_client.py`
-8. `/Users/kalhawari/Documents/Ads Genie/backend/tools.py`
-9. `/Users/kalhawari/Documents/Ads Genie/backend/orchestrator.py`
-10. `/Users/kalhawari/Documents/Ads Genie/frontend/app.js`
+1. `docs/project/AI_HANDOFF.md`
+2. `docs/project/TASKS_LEFT.md`
+3. `CHANGELOG.md`
+4. `README.md`
+5. `backend/server.py`
+6. `backend/db.py`
+7. `backend/ads_client.py`
+8. `backend/tools.py`
+9. `backend/orchestrator.py`
+10. `frontend/app.js`
 
 GitHub repo:
 - `https://github.com/gotmygat/ads-genie`
@@ -26,15 +26,15 @@ GitHub repo:
 Branch:
 - `main`
 
-Latest pushed commit at time of this handoff:
+Latest relevant commit before the current cleanup push:
 - `7a1809e` - `feat: add auth, observability, slack approvals, and live write plumbing`
 
 ## Mandatory Documentation Maintenance Rule
 
-At the end of every completed task, update these three files together:
-- `/Users/kalhawari/Documents/Ads Genie/CHANGELOG.md`
-- `/Users/kalhawari/Documents/Ads Genie/AI_HANDOFF.md`
-- `/Users/kalhawari/Documents/Ads Genie/TASKS_LEFT.md`
+At the end of every completed task, update these files together:
+- `CHANGELOG.md`
+- `docs/project/AI_HANDOFF.md`
+- `docs/project/TASKS_LEFT.md`
 
 Each end-of-task update must include:
 - what changed
@@ -54,14 +54,14 @@ This repository has two parallel implementation paths.
 This is the path the user actually opens in a browser today.
 
 Main files:
-- `/Users/kalhawari/Documents/Ads Genie/backend/server.py`
-- `/Users/kalhawari/Documents/Ads Genie/backend/db.py`
-- `/Users/kalhawari/Documents/Ads Genie/backend/ads_client.py`
-- `/Users/kalhawari/Documents/Ads Genie/backend/tools.py`
-- `/Users/kalhawari/Documents/Ads Genie/backend/orchestrator.py`
-- `/Users/kalhawari/Documents/Ads Genie/frontend/index.html`
-- `/Users/kalhawari/Documents/Ads Genie/frontend/styles.css`
-- `/Users/kalhawari/Documents/Ads Genie/frontend/app.js`
+- `backend/server.py`
+- `backend/db.py`
+- `backend/ads_client.py`
+- `backend/tools.py`
+- `backend/orchestrator.py`
+- `frontend/index.html`
+- `frontend/styles.css`
+- `frontend/app.js`
 
 Characteristics:
 - local HTTP server
@@ -73,12 +73,12 @@ Characteristics:
 ### 2. Production-oriented scaffold
 
 Directories:
-- `/Users/kalhawari/Documents/Ads Genie/mcp_server`
-- `/Users/kalhawari/Documents/Ads Genie/orchestration`
-- `/Users/kalhawari/Documents/Ads Genie/slack_bot`
-- `/Users/kalhawari/Documents/Ads Genie/infrastructure`
-- `/Users/kalhawari/Documents/Ads Genie/memory`
-- `/Users/kalhawari/Documents/Ads Genie/reports`
+- `mcp_server/`
+- `orchestration/`
+- `slack_bot/`
+- `infrastructure/`
+- `memory/`
+- `reports/`
 
 Characteristics:
 - more aligned with the architecture and implementation-plan docs
@@ -100,6 +100,7 @@ Core user requirements across the thread:
 - push work to GitHub
 - keep a useful handoff for another AI if the user runs low on tokens
 - document what is left and whether the original plan was truly implemented
+- keep the repository and README looking organized on GitHub
 
 The user prefers direct execution over speculative planning.
 
@@ -155,7 +156,7 @@ User asks:
 - clarify what campaign types the current tool supports
 
 What was done:
-1. created and updated `TASKS_LEFT.md`
+1. created and updated task memory
 2. wired Google Ads read-path support in the local app
 3. documented the env vars and API endpoints needed to test live access
 4. clarified that advanced optimization support is strongest for Search while read-level visibility can span broader campaign types
@@ -187,7 +188,7 @@ User asks:
 What was done:
 1. published the repo to `https://github.com/gotmygat/ads-genie`
 2. cleaned the branch history into a simpler linear story
-3. upgraded `README.md` into a real setup/deployment/operator guide
+3. upgraded the README into a real setup/deployment/operator guide
 4. later replaced the local frontend files with user-provided versions that introduced:
    - top nav tabs
    - inline modify
@@ -259,6 +260,24 @@ Reason:
 - golden-account validation and final success gates are still incomplete
 - several planned tools remain placeholders in the active local path
 
+### Phase 9 - Repository cleanup for GitHub presentation
+
+User ask:
+- assess whether the README and file/folder layout follow normal GitHub standards and clean them up if not
+
+What was done:
+1. moved planning PDFs and extracts under `docs/planning/`
+2. moved plain-text review extracts under `docs/reference/`
+3. moved internal handoff/task-memory docs under `docs/project/`
+4. moved Google Ads helper scripts under `scripts/google_ads/`
+5. rewrote the root README into a shorter GitHub-facing entrypoint
+6. added `docs/README.md` as a docs index
+7. removed machine-specific absolute paths from the root README and internal docs where practical
+
+Validation for this cleanup:
+- `.venv/bin/pytest tests -q`
+- result: `25 passed`
+
 ## Current Status Matrix
 
 ### Implemented enough to use locally
@@ -313,16 +332,14 @@ Relevant endpoints:
 
 ## Important Local State Notes
 
-- The local SQLite database is at `/Users/kalhawari/Documents/Ads Genie/data/ads_genie.db`.
+- The local SQLite database is at `data/ads_genie.db`.
 - Do not casually reset or overwrite it without explicit user approval.
-- The user also introduced Google OAuth helper files and local credentials-related artifacts through another AI pass. Treat those as intentional unless the user asks to remove them.
+- The user introduced Google OAuth helper files and local credentials-related artifacts through another AI pass. Treat those as intentional unless the user asks to remove them.
 - `client_secrets.json` must not be committed.
 
 ## Running The Current App
 
-Command:
 ```bash
-cd "/Users/kalhawari/Documents/Ads Genie"
 python3 -m backend.server
 ```
 

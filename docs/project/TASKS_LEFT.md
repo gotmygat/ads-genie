@@ -5,9 +5,9 @@ Last updated: 2026-03-17
 ## Documentation Maintenance Rule
 
 After every completed task, update all of these files together:
-- `/Users/kalhawari/Documents/Ads Genie/CHANGELOG.md`
-- `/Users/kalhawari/Documents/Ads Genie/AI_HANDOFF.md`
-- `/Users/kalhawari/Documents/Ads Genie/TASKS_LEFT.md`
+- `CHANGELOG.md`
+- `docs/project/AI_HANDOFF.md`
+- `docs/project/TASKS_LEFT.md`
 
 Each update must record:
 - what changed
@@ -23,6 +23,7 @@ Each update must record:
 - [x] Add local observability/runtime logging
 - [x] Add local Slack interactive approvals
 - [x] Add threshold override and local calibration support
+- [x] Clean up repository layout and shorten the GitHub-facing README
 
 ## Remaining Build Tasks
 - [ ] Validate live Google Ads write mutations against a real client account
@@ -38,7 +39,9 @@ Each update must record:
 - Never block the monitoring loop on provider/API failures; fallback safely.
 - `client_secrets.json` is intentionally ignored and must not be committed.
 - Do not casually reset `data/ads_genie.db` without user approval.
-- The repo currently contains both a local runnable system and a separate production-oriented scaffold; do not confuse the two when reporting status.
+- The repo contains both a local runnable system and a separate production-oriented scaffold; do not confuse the two when reporting status.
+- Root-level clutter was reduced by moving support material into `docs/` and `scripts/`; keep new non-runtime material out of the repo root unless it is a standard root file.
+- Cleanup validation: `.venv/bin/pytest tests -q` passed with `25 passed`.
 
 ## Next Task Note
 - Recommended owner: `any AI`
