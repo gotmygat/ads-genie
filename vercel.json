@@ -1,0 +1,51 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/[...route].js",
+      "use": "@vercel/node"
+    },
+    {
+      "src": "frontend/index.html",
+      "use": "@vercel/static"
+    },
+    {
+      "src": "frontend/app.js",
+      "use": "@vercel/static"
+    },
+    {
+      "src": "frontend/styles.css",
+      "use": "@vercel/static"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "api/[...route].js"
+    },
+    {
+      "src": "/app.js",
+      "dest": "frontend/app.js"
+    },
+    {
+      "src": "/styles.css",
+      "dest": "frontend/styles.css"
+    },
+    {
+      "src": "/alerts",
+      "dest": "frontend/index.html"
+    },
+    {
+      "src": "/campaigns/draft",
+      "dest": "frontend/index.html"
+    },
+    {
+      "src": "/campaigns/draft/(.*)",
+      "dest": "frontend/index.html"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "frontend/index.html"
+    }
+  ]
+}

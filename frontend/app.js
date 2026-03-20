@@ -221,6 +221,50 @@ function unreadNotificationCount() {
   return state.notifications.filter((item) => !state.notificationSeenAt || String(item.created_at) > state.notificationSeenAt).length;
 }
 
+function isNotificationTrayTarget(target) {
+  if (!(target instanceof Element)) return false;
+  return Boolean(target.closest("#notificationTray") || target.closest("#notificationToggle"));
+}
+
+function syncNotificationTray() {
+  if (!el.notificationToggle || !el.notificationTray) return;
+  el.notificationToggle.setAttribute("aria-expanded", String(state.notificationTrayOpen));
+  el.notificationTray.hidden = !state.notificationTrayOpen;
+  if (state.notificationTrayOpen) {
+    renderNotificationTray();
+  }
+}
+
+function setNotificationTrayOpen(nextOpen, { focusToggle = false } = {}) {
+  const normalized = Boolean(nextOpen);
+  if (state.notificationTrayOpen === normalized) {
+    syncNotificationTray();
+    return;
+  }
+  state.notificationTrayOpen = normalized;
+  syncNotificationTray();
+  if (!normalized && focusToggle) {
+    el.notificationToggle?.focus();
+  }
+}
+
+function closeNotificationTray(options = {}) {
+  setNotificationTrayOpen(false, options);
+}
+
+function openNotificationTray() {
+  markNotificationsSeen();
+  setNotificationTrayOpen(true);
+}
+
+function toggleNotificationTray() {
+  if (state.notificationTrayOpen) {
+    closeNotificationTray();
+    return;
+  }
+  openNotificationTray();
+}
+
 function currentRoute() {
   const { pathname, search } = window.location;
   const query = new URLSearchParams(search);
@@ -367,8 +411,7 @@ function renderTopBar() {
   const unread = unreadNotificationCount();
   el.notificationCount.textContent = String(unread);
   el.notificationCount.hidden = unread === 0;
-  el.notificationToggle.setAttribute("aria-expanded", String(state.notificationTrayOpen));
-  el.notificationTray.hidden = !state.notificationTrayOpen;
+  syncNotificationTray();
 }
 
 function renderAccountRail() {
@@ -1121,15 +1164,11 @@ function bindEvents() {
   });
 
   el.notificationToggle.addEventListener("click", () => {
-    state.notificationTrayOpen = !state.notificationTrayOpen;
-    if (state.notificationTrayOpen) markNotificationsSeen();
-    renderTopBar();
-    renderNotificationTray();
+    toggleNotificationTray();
   });
 
   el.closeNotificationTray.addEventListener("click", () => {
-    state.notificationTrayOpen = false;
-    renderTopBar();
+    closeNotificationTray({ focusToggle: true });
   });
 
   el.notificationList.addEventListener("click", async (event) => {
@@ -1202,6 +1241,20 @@ function bindEvents() {
     renderExplainDrawer();
   });
 
+  document.addEventListener(
+    "pointerdown",
+    (event) => {
+      if (!state.notificationTrayOpen || isNotificationTrayTarget(event.target)) return;
+      closeNotificationTray();
+    },
+    true
+  );
+
+  document.addEventListener("keydown", (event) => {
+    if (!state.notificationTrayOpen || event.key !== "Escape") return;
+    closeNotificationTray({ focusToggle: true });
+  });
+
   window.addEventListener("popstate", async () => {
     const route = currentRoute();
     state.currentPage = route.page;
@@ -1236,6 +1289,7 @@ async function init() {
   el.shell.setAttribute("data-page", state.currentPage);
   render();
   syncRoute(true);
+  syncNotificationTray();
   window.setInterval(async () => {
     await loadNotifications();
     renderTopBar();

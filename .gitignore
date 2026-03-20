@@ -12,3 +12,4 @@ client_secrets.json
 google-ads.yaml
 user_credentials.json
 data/*.db
+.vercel
