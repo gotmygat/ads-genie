@@ -8,6 +8,8 @@ import sqlite3
 import threading
 from datetime import datetime, timezone
 
+from orchestration.models.autonomy_levels import normalize_autonomy_level
+
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -242,6 +244,34 @@ class Database:
                     FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE,
                     FOREIGN KEY(alert_id) REFERENCES alerts(id) ON DELETE CASCADE
                 );
+
+                CREATE TABLE IF NOT EXISTS campaign_drafts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_id INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'draft',
+                    prompt_text TEXT NOT NULL DEFAULT '',
+                    campaign_goal TEXT NOT NULL,
+                    target_geography TEXT NOT NULL,
+                    monthly_budget REAL NOT NULL,
+                    context_summary TEXT NOT NULL DEFAULT '',
+                    review_note TEXT,
+                    draft_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    approved_at TEXT,
+                    FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS campaign_draft_files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    draft_id INTEGER NOT NULL,
+                    filename TEXT NOT NULL,
+                    content_type TEXT,
+                    size_bytes INTEGER NOT NULL DEFAULT 0,
+                    content_text TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(draft_id) REFERENCES campaign_drafts(id) ON DELETE CASCADE
+                );
                 """
             )
             self._ensure_column("accounts", "data_source", "TEXT NOT NULL DEFAULT 'demo'")
@@ -255,12 +285,12 @@ class Database:
 
         now = utc_now_iso()
         autonomy = {
-            "default": "propose_wait",
+            "default": "propose_and_wait",
             "action_levels": {
                 "add_negative_keywords": "auto_execute",
-                "pause_campaign": "propose_wait",
-                "adjust_bid": "propose_wait",
-                "draft_campaign": "draft_review",
+                "pause_campaign": "propose_and_wait",
+                "adjust_bid": "propose_and_wait",
+                "draft_campaign": "draft_and_review",
             },
             "escalation": {
                 "spend_anomaly_pct": 50,
@@ -596,15 +626,27 @@ class Database:
         autonomy_json: str,
         data_source: str = "demo",
         google_ads_customer_name: str | None = None,
+        quiet_hours_start: int | None = None,
+        quiet_hours_end: int | None = None,
     ) -> dict[str, Any]:
         now = utc_now_iso()
+        autonomy_payload = json.loads(autonomy_json or "{}")
+        if isinstance(autonomy_payload, dict):
+            autonomy_payload["default"] = normalize_autonomy_level(autonomy_payload.get("default"), default="propose_and_wait")
+            levels = autonomy_payload.get("action_levels", {})
+            if isinstance(levels, dict):
+                autonomy_payload["action_levels"] = {
+                    str(key): normalize_autonomy_level(value, default=normalize_autonomy_level(value))
+                    for key, value in levels.items()
+                }
+        normalized_autonomy_json = json.dumps(autonomy_payload)
         cur = self.execute(
             """
             INSERT INTO accounts (
                 name, customer_id, vertical, timezone, slack_channel, data_source,
                 google_ads_customer_name, status,
-                autonomy_json, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+                autonomy_json, quiet_hours_start, quiet_hours_end, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)
             """,
             (
                 name,
@@ -614,7 +656,9 @@ class Database:
                 slack_channel,
                 data_source,
                 google_ads_customer_name,
-                autonomy_json,
+                normalized_autonomy_json,
+                quiet_hours_start,
+                quiet_hours_end,
                 now,
                 now,
             ),
@@ -766,7 +810,7 @@ class Database:
         )
 
     def mark_action_status(self, action_id: int, status: str, reason: str) -> None:
-        executed_at = utc_now_iso() if status in {"executed", "failed", "blocked"} else None
+        executed_at = utc_now_iso() if status in {"executed", "failed", "blocked", "rolled_back", "rollback_blocked"} else None
         self.execute(
             """
             UPDATE actions
@@ -774,6 +818,12 @@ class Database:
             WHERE id = ?
             """,
             (status, reason, executed_at, action_id),
+        )
+
+    def update_action_params(self, action_id: int, params: dict[str, Any]) -> None:
+        self.execute(
+            "UPDATE actions SET params_json = ? WHERE id = ?",
+            (json.dumps(params), action_id),
         )
 
     def list_actions(self, account_id: int | None = None, limit: int = 100) -> list[dict[str, Any]]:
@@ -853,6 +903,16 @@ class Database:
         except sqlite3.IntegrityError:
             return False
 
+    def remove_negative_keyword(self, account_id: int, keyword: str) -> bool:
+        cur = self.execute(
+            """
+            DELETE FROM negative_keywords
+            WHERE account_id = ? AND keyword = ?
+            """,
+            (account_id, keyword.strip().lower()),
+        )
+        return int(cur.rowcount) > 0
+
     def list_negative_keywords(self, account_id: int) -> list[dict[str, Any]]:
         return self.fetchall(
             """
@@ -869,6 +929,25 @@ class Database:
             "UPDATE campaigns SET status = ?, updated_at = ? WHERE id = ?",
             (status, utc_now_iso(), campaign_id),
         )
+
+    def set_campaign_bid_modifier(self, campaign_id: int, bid_modifier: float) -> dict[str, Any] | None:
+        campaign = self.fetchone(
+            "SELECT id, bid_modifier FROM campaigns WHERE id = ?",
+            (campaign_id,),
+        )
+        if not campaign:
+            return None
+        current = float(campaign["bid_modifier"])
+        next_value = max(0.1, min(3.0, float(bid_modifier)))
+        self.execute(
+            "UPDATE campaigns SET bid_modifier = ?, updated_at = ? WHERE id = ?",
+            (next_value, utc_now_iso(), campaign_id),
+        )
+        return {
+            "campaign_id": campaign_id,
+            "bid_modifier_before": round(current, 4),
+            "bid_modifier_after": round(next_value, 4),
+        }
 
     def adjust_campaign_bid(self, campaign_id: int, pct_delta: float) -> dict[str, Any] | None:
         campaign = self.fetchone(
@@ -932,6 +1011,195 @@ class Database:
             LIMIT 1
             """,
             (report_type, account_id),
+        )
+
+    def create_campaign_draft(
+        self,
+        account_id: int,
+        prompt_text: str,
+        campaign_goal: str,
+        target_geography: str,
+        monthly_budget: float,
+        context_summary: str,
+        draft: dict[str, Any],
+        files: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        now = utc_now_iso()
+        cur = self.execute(
+            """
+            INSERT INTO campaign_drafts (
+                account_id, status, prompt_text, campaign_goal, target_geography,
+                monthly_budget, context_summary, draft_json, created_at, updated_at
+            ) VALUES (?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                account_id,
+                prompt_text,
+                campaign_goal,
+                target_geography,
+                monthly_budget,
+                context_summary,
+                json.dumps(draft),
+                now,
+                now,
+            ),
+        )
+        draft_id = int(cur.lastrowid)
+        if files:
+            self.executemany(
+                """
+                INSERT INTO campaign_draft_files (
+                    draft_id, filename, content_type, size_bytes, content_text, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        draft_id,
+                        str(item.get("filename", "context.txt")),
+                        str(item.get("content_type", "")),
+                        int(item.get("size_bytes", 0)),
+                        str(item.get("content_text", "")),
+                        now,
+                    )
+                    for item in files
+                ],
+            )
+        return self.get_campaign_draft(draft_id) or {}
+
+    def update_campaign_draft(
+        self,
+        draft_id: int,
+        *,
+        prompt_text: str,
+        campaign_goal: str,
+        target_geography: str,
+        monthly_budget: float,
+        context_summary: str,
+        review_note: str | None,
+        draft: dict[str, Any],
+        files: list[dict[str, Any]] | None = None,
+        status: str = "draft",
+    ) -> dict[str, Any] | None:
+        now = utc_now_iso()
+        self.execute(
+            """
+            UPDATE campaign_drafts
+            SET status = ?, prompt_text = ?, campaign_goal = ?, target_geography = ?,
+                monthly_budget = ?, context_summary = ?, review_note = ?, draft_json = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                status,
+                prompt_text,
+                campaign_goal,
+                target_geography,
+                monthly_budget,
+                context_summary,
+                review_note,
+                json.dumps(draft),
+                now,
+                draft_id,
+            ),
+        )
+        if files is not None:
+            self.execute("DELETE FROM campaign_draft_files WHERE draft_id = ?", (draft_id,))
+            if files:
+                self.executemany(
+                    """
+                    INSERT INTO campaign_draft_files (
+                        draft_id, filename, content_type, size_bytes, content_text, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            draft_id,
+                            str(item.get("filename", "context.txt")),
+                            str(item.get("content_type", "")),
+                            int(item.get("size_bytes", 0)),
+                            str(item.get("content_text", "")),
+                            now,
+                        )
+                        for item in files
+                    ],
+                )
+        return self.get_campaign_draft(draft_id)
+
+    def mark_campaign_draft_status(self, draft_id: int, status: str, review_note: str | None = None) -> dict[str, Any] | None:
+        now = utc_now_iso()
+        self.execute(
+            """
+            UPDATE campaign_drafts
+            SET status = ?, review_note = COALESCE(?, review_note), updated_at = ?, approved_at = CASE WHEN ? = 'approved' THEN ? ELSE approved_at END
+            WHERE id = ?
+            """,
+            (status, review_note, now, status, now, draft_id),
+        )
+        return self.get_campaign_draft(draft_id)
+
+    def get_campaign_draft(self, draft_id: int) -> dict[str, Any] | None:
+        return self.fetchone(
+            """
+            SELECT id, account_id, status, prompt_text, campaign_goal, target_geography,
+                   monthly_budget, context_summary, review_note, draft_json,
+                   created_at, updated_at, approved_at
+            FROM campaign_drafts
+            WHERE id = ?
+            """,
+            (draft_id,),
+        )
+
+    def latest_campaign_draft(self, account_id: int, pending_first: bool = True) -> dict[str, Any] | None:
+        if pending_first:
+            pending = self.fetchone(
+                """
+                SELECT id, account_id, status, prompt_text, campaign_goal, target_geography,
+                       monthly_budget, context_summary, review_note, draft_json,
+                       created_at, updated_at, approved_at
+                FROM campaign_drafts
+                WHERE account_id = ? AND status = 'draft'
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 1
+                """,
+                (account_id,),
+            )
+            if pending:
+                return pending
+        return self.fetchone(
+            """
+            SELECT id, account_id, status, prompt_text, campaign_goal, target_geography,
+                   monthly_budget, context_summary, review_note, draft_json,
+                   created_at, updated_at, approved_at
+            FROM campaign_drafts
+            WHERE account_id = ?
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 1
+            """,
+            (account_id,),
+        )
+
+    def list_campaign_drafts(self, account_id: int, limit: int = 25) -> list[dict[str, Any]]:
+        return self.fetchall(
+            """
+            SELECT id, account_id, status, prompt_text, campaign_goal, target_geography,
+                   monthly_budget, context_summary, review_note, draft_json,
+                   created_at, updated_at, approved_at
+            FROM campaign_drafts
+            WHERE account_id = ?
+            ORDER BY CASE WHEN status = 'draft' THEN 0 ELSE 1 END, updated_at DESC, id DESC
+            LIMIT ?
+            """,
+            (account_id, limit),
+        )
+
+    def list_campaign_draft_files(self, draft_id: int) -> list[dict[str, Any]]:
+        return self.fetchall(
+            """
+            SELECT id, draft_id, filename, content_type, size_bytes, content_text, created_at
+            FROM campaign_draft_files
+            WHERE draft_id = ?
+            ORDER BY id ASC
+            """,
+            (draft_id,),
         )
 
     def list_context_memory(self, account_id: int) -> list[dict[str, Any]]:

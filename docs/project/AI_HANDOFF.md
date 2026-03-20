@@ -26,8 +26,8 @@ GitHub repo:
 Branch:
 - `main`
 
-Latest relevant commit before the current cleanup push:
-- `7a1809e` - `feat: add auth, observability, slack approvals, and live write plumbing`
+Latest relevant commit before this handoff/publish pass:
+- `e2146b0` - `Harden auth, CORS, and XSS protections across app and MCP`
 
 ## Mandatory Documentation Maintenance Rule
 
@@ -290,6 +290,104 @@ What was done:
 4. documented that the SQLite DB is generated local state, not a source artifact
 5. retained the `data/` directory in the repo via `data/.gitkeep`
 
+### Phase 11 - Security hardening pass
+
+User ask:
+- find and patch the current repo security mistakes, day-0 vulnerabilities, and obvious app/MCP security flaws
+
+What was done:
+1. tightened the local app CORS/origin posture instead of allowing broad default access
+2. added stricter auth requirements around the local control plane depending on runtime configuration
+3. reduced frontend XSS risk by removing unsafe rendering paths and sanitizing UI-bound content
+4. gated MCP routes behind bearer-token auth and disabled open docs exposure by default
+5. redacted more sensitive runtime-event payload data and reduced error-detail leakage
+6. added Slack replay-signature caching
+7. fixed an autonomy-policy bug in `enable_ad_group`
+8. stopped printing the full OAuth refresh token in helper-script stdout
+9. pinned runtime/dev dependencies instead of leaving broad floating ranges
+
+Validation for this phase:
+- `.venv/bin/pytest tests -q`
+- result reported during that pass: `26 passed`
+
+Main commit:
+- `e2146b0` - `Harden auth, CORS, and XSS protections across app and MCP`
+
+### Phase 12 - Plan/doc reconciliation implementation pass
+
+User ask:
+- read the supplied planning documents, compare them against the repo, and implement the missing work that was still practical in the current local path
+
+What was done:
+1. read the supplied DOCX/PDF planning documents fully
+2. produced a repo-vs-plan gap report
+3. normalized legacy autonomy aliases through a shared `orchestration/models/autonomy_levels.py`
+4. persisted and enforced account quiet hours in the local backend/orchestrator
+5. added rollback handling for previously executed local actions where rollback metadata exists
+6. updated write-action policy helpers to use the normalized autonomy model consistently
+7. added tests covering autonomy normalization, quiet-hours deferral, rollback behavior, and related write-action behavior
+
+Validation reported during that pass:
+- targeted suite: `16 passed`
+- full suite: `31 passed`
+
+Important limitation:
+- rollback is still local-path oriented; live Google Ads rollback is not generally implemented
+
+### Phase 13 - UI/spec2 implementation pass
+
+User ask:
+- compare the frontend against `ads-genie-ui-spec2.md` and make sure backend capabilities are actually reachable from the UI where it makes sense
+
+What was done:
+1. added a campaign-builder intake flow with:
+   - freeform prompt/context input
+   - context-file upload support for the AI/campaign draft flow
+   - persisted campaign draft records in SQLite
+2. added campaign-draft APIs in the local backend, including:
+   - create draft
+   - fetch latest draft
+   - fetch one draft
+   - approve draft
+   - modify draft
+3. added `/api/notifications` and a top-right notification tray in the frontend
+4. added frontend routing/state support for campaign-draft and alerts-oriented surfaces
+5. connected the new UI elements to the local backend endpoints so the local app exposes more of the implemented backend behavior
+
+Validation note:
+- a later local rerun of `tests/test_system.py` in the agent sandbox hit a socket-bind permission error while starting a temporary `ThreadingHTTPServer`
+- this looked environment-related rather than a deterministic app regression, but it means browser/runtime verification is still recommended from the user environment
+
+Important reality check from the follow-up UI audit:
+- improved, but not spec-complete
+- remaining spec2 gaps include:
+  - replace remaining `/decision`-style alert flow assumptions with the approval/modify/dismiss contract expected by the spec
+  - replace any prompt-based modify flow with an inline editor everywhere it still remains
+  - finish account-scoped alert/status/settings/query/log surfaces expected by the spec
+  - complete the alert polling/new-alert banner behavior expected by the spec
+  - decide whether strict spec compliance requires a React/Tailwind/router-state rewrite instead of the current vanilla frontend
+
+### Phase 14 - Final security review after the newer backend/UI work
+
+User ask:
+- run one more security sweep against the updated repo
+
+Latest review outcome:
+- no new critical findings were reported
+- highest remaining risks were:
+  - missing object-level authorization on some account/draft/alert actions
+  - unbounded POST body reads that could allow memory-pressure abuse
+- medium-risk follow-ups remained around:
+  - CSRF/origin edge cases
+  - DOCX/XML parsing/resource-exhaustion risk
+  - some DOM XSS exposure in newer notification/draft UI paths
+  - approval/decision race/idempotency handling
+  - internal error detail leakage
+
+Current interpretation:
+- the repo is materially harder to exploit than before `e2146b0`
+- however, the latest UI/back-end additions still need one more focused security pass before claiming the local control plane is fully hardened
+
 ## Current Status Matrix
 
 ### Implemented enough to use locally
@@ -302,6 +400,11 @@ What was done:
 - local dashboard/API auth
 - local observability/runtime-event logging
 - some real Google Ads write plumbing
+- normalized autonomy policy handling across local and MCP-style write paths
+- quiet-hours deferral in the local orchestrator
+- local rollback support for supported executed actions
+- campaign draft creation/review APIs and persisted context files
+- top-right notification tray backed by `/api/notifications`
 
 ### Partially implemented
 - Slack end-to-end control plane
@@ -309,6 +412,7 @@ What was done:
 - production-oriented MCP server path
 - threshold tuning/calibration
 - campaign-builder flow
+- UI/spec2 alignment
 - production deployment model
 
 ### Still incomplete
@@ -318,6 +422,8 @@ What was done:
 - AWS deployment and runtime verification
 - production persistence replacing local SQLite for hosted use
 - full implementation of every planned tool in the local active path
+- full spec2 frontend/API contract compliance
+- final hardening of object-level authorization and large-body handling in the newest endpoints
 
 ## Real vs Demo Data
 
@@ -367,13 +473,15 @@ Caveat:
 The current highest-value unfinished work is not more scaffolding. It is live validation.
 
 Primary remaining tasks:
-1. connect one real Google Ads client cleanly
-2. isolate or reduce demo noise in the local DB for a trustworthy pilot
-3. validate read-path outputs against the real Google Ads UI
-4. test one safe write action end-to-end on a real client
-5. validate Slack interactive approvals in a real workspace
-6. tune thresholds against real account behavior
-7. decide whether production deployment should target AWS-first instead of trying to force Vercel
+1. patch the highest remaining security findings on the new account/draft/alert surfaces
+2. finish the missing spec2 alert/status/settings/query/log contract work in the local app
+3. connect one real Google Ads client cleanly
+4. isolate or reduce demo noise in the local DB for a trustworthy pilot
+5. validate read-path outputs against the real Google Ads UI
+6. test one safe write action end-to-end on a real client
+7. validate Slack interactive approvals in a real workspace
+8. tune thresholds against real account behavior
+9. decide whether production deployment should target AWS-first instead of trying to force Vercel
 
 ## Next Task Note
 
@@ -381,14 +489,14 @@ Recommended owner:
 - `any AI`
 
 Exact next task:
-- prepare a one-client live pilot by isolating demo noise, verifying credentials, importing one live Google Ads account, and validating the read path against the real Google Ads UI
+- close the current highest-risk gaps by hardening object-level authorization and request-size limits, then finish the missing spec2 local API/UI contract for alerts, status, settings, query/log, and approval-only execution behavior
 
 Why this is next:
-- the repo already has enough local functionality that more abstract scaffolding yields diminishing returns
-- the biggest uncertainty is whether the implemented read/write behavior matches reality on a real account
+- the repo now has materially more UI/backend surface area, so the immediate risk is mismatch and exposure on the newly added endpoints
+- after that hardening/contract pass, the next highest-value work returns to real-client validation instead of more speculative architecture work
 
 Success criteria for the next task:
-- one live account imported successfully
-- dashboard/account metrics clearly traceable to real Google Ads data
-- health check and budget-waste outputs manually spot-checked against Google Ads UI
-- one low-risk write action tested with validate-first behavior
+- account/draft/alert mutations are protected by object-level authorization and bounded request parsing
+- local UI uses the intended alert decision/status contract without prompt-based fallbacks
+- missing spec2-facing endpoints or UI surfaces are either implemented or explicitly documented as deferred
+- targeted tests for the new security/UI contract pass, followed by a fresh user-environment runtime check

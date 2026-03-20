@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from mcp_server.auth.google_oauth import GoogleAdsAuth
 from orchestration.models.account_registry import AccountRegistry
 from orchestration.models.autonomy_config import AutonomyConfig
+from orchestration.models.autonomy_levels import normalize_autonomy_level
 from orchestration.models.decision_log import DecisionLog
 
 
@@ -75,7 +76,7 @@ def extract_operation_ids(response: Any) -> list[str]:
 
 
 def decision_state_from_policy(policy: dict[str, Any]) -> str:
-    return "auto_executed" if str(policy.get("level", "")).strip() == "auto_execute" else "approved"
+    return "auto_executed" if normalize_autonomy_level(policy.get("level", "")) == "auto_execute" else "approved"
 
 
 def write_pre_execution_log(

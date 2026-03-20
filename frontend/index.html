@@ -21,24 +21,43 @@
         <span class="brand-name">Ads Genie</span>
         <span class="beta-pill">beta</span>
       </div>
+
       <div class="nav-tabs">
-        <button class="nav-tab active" data-page="alerts">
+        <button class="nav-tab active" data-page="alerts" aria-label="Alerts page">
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-          Alerts
+          <span class="nav-label">Alerts</span>
         </button>
-        <button class="nav-tab" data-page="campaigns">
+        <button class="nav-tab" data-page="campaigns" aria-label="Campaign Builder page">
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-          Campaign Builder
+          <span class="nav-label">Campaign Builder</span>
         </button>
       </div>
-      <span id="monitoringStatus" class="status-pill live">
-        <span class="status-dot"></span>
-        Monitoring live
-      </span>
+
+      <div class="nav-actions">
+        <button id="notificationToggle" class="notification-toggle" aria-expanded="false" aria-controls="notificationTray">
+          <span class="notification-icon">●</span>
+          <span class="notification-text">Notifications</span>
+          <span id="notificationCount" class="notification-count">0</span>
+        </button>
+        <span id="monitoringStatus" class="status-pill live">
+          <span class="status-dot"></span>
+          Monitoring live
+        </span>
+      </div>
     </nav>
 
-    <div class="shell" data-page="alerts">
+    <aside id="notificationTray" class="notification-tray" hidden>
+      <div class="notification-tray-head">
+        <div>
+          <p class="section-kicker">Live Feed</p>
+          <h3>Recent notifications</h3>
+        </div>
+        <button id="closeNotificationTray" class="ghost-btn small">Close</button>
+      </div>
+      <div id="notificationList" class="notification-list"></div>
+    </aside>
 
+    <div class="shell" data-page="alerts">
       <aside class="rail">
         <div class="brand-block">
           <span class="rail-section-label">Accounts</span>
@@ -57,58 +76,111 @@
         </div>
       </aside>
 
-      <main class="command-pane">
-        <header class="command-header">
-          <div>
-            <p id="selectedAccountMeta" class="section-kicker">No account selected</p>
-            <h2 id="selectedAccountTitle">Ads Genie</h2>
-          </div>
-          <div class="header-actions">
-            <button id="calibrateThresholdsBtn" class="ghost-btn">Calibrate thresholds</button>
-            <button id="generateWeeklyBtn" class="ghost-btn">Refresh report</button>
-          </div>
-        </header>
-
-        <section id="metricCards" class="metric-grid"></section>
-
-        <section class="panel feed-panel">
-          <div class="panel-head">
+      <main class="page-stage">
+        <section id="alertsPage" class="page page-alerts">
+          <header class="page-header">
             <div>
-              <p class="section-kicker">Active Alerts</p>
-              <h3>Decision queue</h3>
+              <p id="selectedAccountMeta" class="section-kicker">No account selected</p>
+              <h2 id="selectedAccountTitle">Ads Genie</h2>
             </div>
-            <span id="queueSummary" class="queue-summary">0 pending &middot; 0 approved</span>
-          </div>
-          <div id="alertFeed" class="alert-feed"></div>
+            <div class="header-actions">
+              <button id="calibrateThresholdsBtn" class="ghost-btn">Calibrate thresholds</button>
+              <button id="generateWeeklyBtn" class="ghost-btn">Refresh report</button>
+            </div>
+          </header>
+
+          <section id="metricCards" class="metric-grid"></section>
+
+          <section class="panel feed-panel">
+            <div class="panel-head">
+              <div>
+                <p class="section-kicker">Active Alerts</p>
+                <h3>Decision queue</h3>
+              </div>
+              <span id="queueSummary" class="queue-summary">0 pending &middot; 0 approved</span>
+            </div>
+            <div id="alertFeed" class="alert-feed"></div>
+          </section>
+
+          <section class="panel report-panel">
+            <div class="panel-head">
+              <div>
+                <p class="section-kicker">Portfolio View</p>
+                <h3>Weekly MCC report</h3>
+              </div>
+              <button id="loadWeeklyBtn" class="ghost-btn small">Load latest</button>
+            </div>
+            <div id="systemStatus" class="system-status"></div>
+            <div id="weeklyReport" class="weekly-report"></div>
+          </section>
         </section>
 
-        <section class="panel report-panel">
-          <div class="panel-head">
+        <section id="campaignPage" class="page page-campaigns">
+          <header class="page-header campaign-page-head">
             <div>
-              <p class="section-kicker">Portfolio View</p>
-              <h3>Weekly MCC report</h3>
+              <p class="section-kicker">Campaign Builder</p>
+              <h2 id="campaignPageTitle">Draft and launch flow</h2>
             </div>
-            <button id="loadWeeklyBtn" class="ghost-btn small">Load latest</button>
-          </div>
-          <div id="systemStatus" class="system-status"></div>
-          <div id="weeklyReport" class="weekly-report"></div>
+            <div class="campaign-head-actions">
+              <label class="draft-selector">
+                <span>Draft</span>
+                <select id="draftSelector"></select>
+              </label>
+              <button id="refreshDraftsBtn" class="ghost-btn">Refresh</button>
+            </div>
+          </header>
+
+          <section class="panel campaign-intake-panel">
+            <div class="panel-head">
+              <div>
+                <p class="section-kicker">Campaign Intake</p>
+                <h3>Provide context before building</h3>
+              </div>
+              <button id="buildCampaignBtn" class="primary-btn">Build campaign</button>
+            </div>
+            <div class="campaign-intake-grid">
+              <label class="field-group field-span-2">
+                <span>Prompt / operator context</span>
+                <textarea id="campaignPromptInput" rows="5" placeholder="Example: Push emergency dental offers for downtown commuters, exclude student traffic, and keep tone premium."></textarea>
+              </label>
+              <label class="field-group">
+                <span>Campaign goal</span>
+                <input id="campaignGoalInput" type="text" placeholder="Lead generation" />
+              </label>
+              <label class="field-group">
+                <span>Geo target</span>
+                <input id="campaignGeoInput" type="text" placeholder="Toronto +25mi" />
+              </label>
+              <label class="field-group">
+                <span>Monthly budget</span>
+                <input id="campaignBudgetInput" type="number" min="500" step="100" placeholder="3000" />
+              </label>
+              <label class="field-group">
+                <span>Reference files</span>
+                <input id="campaignFilesInput" type="file" multiple accept=".txt,.md,.csv,.json,.yaml,.yml,.xml,.html,.htm,.docx" />
+              </label>
+            </div>
+            <div class="campaign-intake-footer">
+              <div id="campaignContextHint" class="hint-text">Add a brief, then attach supporting docs such as offer notes, landing page copy, or brand guardrails.</div>
+              <div id="campaignFileList" class="file-chip-row"></div>
+            </div>
+          </section>
+
+          <div id="campaignEmptyState" class="panel campaign-empty-state"></div>
+          <div id="campaignWorkspace" class="campaign-workspace"></div>
         </section>
       </main>
+    </div>
 
-      <aside class="inspector-pane">
-        <div class="panel-head inspector-head">
-          <div>
-            <p class="section-kicker">Campaign Builder / Review</p>
-            <h3 id="inspectorTitle">Select an alert or generate a draft</h3>
-          </div>
-          <div class="inspector-head-actions">
-            <button id="generateDraftBtn" class="primary-btn small">Generate draft</button>
-            <button id="refreshSelectedBtn" class="ghost-btn small">Refresh</button>
-          </div>
+    <div id="campaignExplainDrawer" class="drawer" hidden>
+      <div class="drawer-head">
+        <div>
+          <p class="section-kicker">Explain Structure</p>
+          <h3>Why this campaign is laid out this way</h3>
         </div>
-        <div id="inspectorBody" class="inspector-body"></div>
-      </aside>
-
+        <button id="closeExplainDrawer" class="ghost-btn small">Close</button>
+      </div>
+      <div id="campaignExplainBody" class="drawer-body"></div>
     </div>
 
     <script type="module" src="/app.js"></script>

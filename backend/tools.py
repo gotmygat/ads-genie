@@ -21,6 +21,13 @@ BENCHMARKS: dict[str, VerticalBenchmark] = {
     "day_spa": VerticalBenchmark(roas_healthy=2.0, cpa_target=60, quality_score_min=6.5),
     "dental": VerticalBenchmark(roas_healthy=4.0, cpa_target=180, quality_score_min=6.8),
 }
+DISABLED_TOOL_NAMES = {
+    "competitor_analysis",
+    "landing_page_audit",
+    "keyword_expansion",
+    "ad_copy_performance",
+    "pacing",
+}
 
 
 def _safe_div(numerator: float, denominator: float) -> float:
@@ -157,7 +164,7 @@ class ToolEngine:
         }
 
     def list_tools(self) -> list[dict[str, Any]]:
-        return [
+        tools = [
             {
                 "name": "health_check",
                 "description": "Vertical-aware account health diagnostic based on ROAS, CPA, quality score, and budget pressure.",
@@ -224,9 +231,12 @@ class ToolEngine:
                 "requires_account": True,
             },
         ]
+        return [tool for tool in tools if tool["name"] not in DISABLED_TOOL_NAMES]
 
     def run_tool(self, tool_name: str, account_id: int | None, params: dict[str, Any] | None = None) -> dict[str, Any]:
         params = params or {}
+        if tool_name in DISABLED_TOOL_NAMES:
+            raise ValueError(f"Tool {tool_name} is disabled until implemented")
         fn = self._dispatch.get(tool_name)
         if not fn:
             raise ValueError(f"Unknown tool: {tool_name}")
@@ -554,6 +564,8 @@ class ToolEngine:
         benchmark: VerticalBenchmark = m["benchmark"]
         target_geography = str(params.get("target_geography", "Local radius +25mi")).strip() or "Local radius +25mi"
         campaign_goal = str(params.get("campaign_goal", "Lead generation")).strip() or "Lead generation"
+        prompt_text = str(params.get("prompt_text", "")).strip()
+        context_files = params.get("context_files", [])
         account_name = str(m["account"]["name"])
 
         if vertical == "self_storage":
@@ -659,6 +671,13 @@ class ToolEngine:
             },
             "kal_note": kal_note,
             "shared_negatives": shared_negatives,
+            "prompt_text": prompt_text,
+            "context_files": context_files if isinstance(context_files, list) else [],
+            "context_signals": {
+                "prompt_supplied": bool(prompt_text),
+                "file_count": len(context_files) if isinstance(context_files, list) else 0,
+                "memory_count": len(m["context_memory"]),
+            },
             "ad_groups": stag_groups,
             "responsive_search_ad": {
                 "headlines": stag_groups[0]["headlines"],

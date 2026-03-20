@@ -8,13 +8,7 @@ try:
 except ImportError:  # pragma: no cover - dependency installed in target runtime
     boto3 = None  # type: ignore[assignment]
 
-
-LEVEL_ORDER = {
-    "auto_execute": 0,
-    "propose_and_wait": 1,
-    "draft_and_review": 2,
-    "escalate": 3,
-}
+from orchestration.models.autonomy_levels import LEVEL_ORDER, normalize_autonomy_level
 
 
 class AutonomyPolicyViolation(RuntimeError):
@@ -48,10 +42,12 @@ class AutonomyConfig:
         requested_change_pct: float | None = None,
     ) -> dict[str, Any]:
         policy = self.get_action_policy(config_id, action_type)
-        current_level = str(policy.get("level", "escalate"))
-        if LEVEL_ORDER.get(current_level, 99) < LEVEL_ORDER.get(minimum_level, 99):
+        current_level = normalize_autonomy_level(policy.get("level", "escalate"))
+        required_level = normalize_autonomy_level(minimum_level)
+        policy["level"] = current_level
+        if LEVEL_ORDER.get(current_level, 99) < LEVEL_ORDER.get(required_level, 99):
             raise AutonomyPolicyViolation(
-                f"Action '{action_type}' configured as '{current_level}', below required minimum '{minimum_level}'."
+                f"Action '{action_type}' configured as '{current_level}', below required minimum '{required_level}'."
             )
         if requested_change_pct is not None and "max_change_pct" in policy:
             requested_change_pct = max(-float(policy["max_change_pct"]), min(float(policy["max_change_pct"]), requested_change_pct))

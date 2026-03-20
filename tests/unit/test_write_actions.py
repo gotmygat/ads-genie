@@ -8,7 +8,7 @@ from mcp_server.write_actions.add_negative_keywords import add_negative_keywords
 from mcp_server.write_actions.adjust_bids import adjust_bids
 from mcp_server.write_actions.enable_ad_group import enable_ad_group
 from mcp_server.write_actions.pause_ad_group import pause_ad_group
-from orchestration.models.autonomy_config import AutonomyPolicyViolation
+from orchestration.models.autonomy_config import AutonomyConfig, AutonomyPolicyViolation
 
 
 class FakeRegistry:
@@ -194,3 +194,10 @@ def test_enable_ad_group_uses_enable_policy(account) -> None:
             autonomy=FakeAutonomy({"pause_ad_group": {"level": "propose_and_wait"}}),
             decision_log=FakeDecisionLog(),
         )
+
+
+def test_autonomy_config_normalizes_legacy_level_aliases() -> None:
+    config = AutonomyConfig(table_name="")
+    config.get_action_policy = lambda *_args, **_kwargs: {"level": "draft_review"}  # type: ignore[method-assign]
+    policy = config.validate_action("config-1", "draft_campaign", "propose_wait")
+    assert policy["level"] == "draft_and_review"

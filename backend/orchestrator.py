@@ -13,6 +13,7 @@ from .observability import RuntimeMonitor
 from .reports import ReportService
 from .slack_bridge import SlackBridge
 from .tools import ToolEngine
+from orchestration.models.autonomy_levels import LEVEL_ORDER, normalize_autonomy_level
 
 
 SEVERITY_ORDER = {
@@ -22,14 +23,6 @@ SEVERITY_ORDER = {
     "high": 3,
     "critical": 4,
 }
-
-AUTONOMY_ORDER = {
-    "auto_execute": 0,
-    "propose_wait": 1,
-    "draft_review": 2,
-    "escalate": 3,
-}
-
 
 class Orchestrator:
     def __init__(
@@ -50,6 +43,29 @@ class Orchestrator:
         self.monitor = monitor
         self.timezone = ZoneInfo(timezone_name)
 
+    def _account_now(self, account: dict[str, Any]) -> datetime:
+        timezone_name = str(account.get("timezone") or self.timezone.key)
+        try:
+            zone = ZoneInfo(timezone_name)
+        except Exception:
+            zone = self.timezone
+        return datetime.now(zone)
+
+    def _is_in_quiet_hours(self, account: dict[str, Any], *, now: datetime | None = None) -> bool:
+        start = account.get("quiet_hours_start")
+        end = account.get("quiet_hours_end")
+        if start is None or end is None:
+            return False
+        start_hour = int(start)
+        end_hour = int(end)
+        if start_hour == end_hour:
+            return False
+        current = now or self._account_now(account)
+        hour = current.hour
+        if start_hour < end_hour:
+            return start_hour <= hour < end_hour
+        return hour >= start_hour or hour < end_hour
+
     def _max_severity(self, severities: list[str]) -> str:
         if not severities:
             return "none"
@@ -65,7 +81,7 @@ class Orchestrator:
     ) -> str:
         autonomy = json.loads(account.get("autonomy_json", "{}") or "{}")
         action_levels = autonomy.get("action_levels", {})
-        level = str(action_levels.get(action_type, autonomy.get("default", "propose_wait")))
+        level = normalize_autonomy_level(action_levels.get(action_type, autonomy.get("default", "propose_and_wait")))
 
         escalation = autonomy.get("escalation", {})
         spend_threshold = float(escalation.get("spend_anomaly_pct", 50))
@@ -81,7 +97,7 @@ class Orchestrator:
 
         # Guardrail: critical alerts never auto execute.
         if severity == "critical" and level == "auto_execute":
-            return "propose_wait"
+            return "propose_and_wait"
 
         return level
 
@@ -253,7 +269,12 @@ class Orchestrator:
                 self._resolve_action_level(account, rec["action_type"], overall_severity, health, roas_diag)
                 for rec in recommendations
             ]
-            overall_level = max(levels, key=lambda lvl: AUTONOMY_ORDER.get(lvl, 1))
+            quiet_hours_active = self._is_in_quiet_hours(account)
+            effective_levels = [
+                "propose_and_wait" if quiet_hours_active and level == "auto_execute" else level
+                for level in levels
+            ]
+            overall_level = max(effective_levels, key=lambda lvl: LEVEL_ORDER.get(lvl, 1))
 
             status = "open"
             requires_approval = True
@@ -274,6 +295,11 @@ class Orchestrator:
                 "roas_drop": roas_diag,
                 "benchmark": benchmark,
                 "cross_mcc": cross_mcc,
+                "quiet_hours": {
+                    "active": quiet_hours_active,
+                    "start": account.get("quiet_hours_start"),
+                    "end": account.get("quiet_hours_end"),
+                },
             }
 
             title = f"{account['name']} — {overall_severity.upper()} performance alert"
@@ -296,14 +322,16 @@ class Orchestrator:
             )
             created_alerts += 1
 
-            for rec, level in zip(recommendations, levels):
+            for rec, level, effective_level in zip(recommendations, levels, effective_levels):
                 action_status = "pending"
-                action_reason = f"Autonomy level {level}; waiting for decision"
-                if level == "draft_review":
+                action_reason = f"Autonomy level {effective_level}; waiting for decision"
+                if effective_level == "draft_and_review":
                     action_status = "draft"
-                elif level == "escalate":
+                elif effective_level == "escalate":
                     action_status = "blocked"
                     action_reason = "Escalated by policy threshold"
+                elif quiet_hours_active and level == "auto_execute":
+                    action_reason = "Deferred until quiet hours end"
 
                 action_row = self.db.insert_action(
                     account_id=aid,
@@ -314,10 +342,10 @@ class Orchestrator:
                     alert_id=alert_id,
                 )
 
-                if level == "auto_execute":
+                if effective_level == "auto_execute":
                     result = self.actions.execute(action_row, source="system")
                     auto_executed += 1 if result.get("ok") else 0
-                elif level == "escalate":
+                elif effective_level == "escalate":
                     escalated += 1
 
             decision_action = "alert_created"
@@ -325,6 +353,8 @@ class Orchestrator:
                 decision_action = "auto_executed"
             elif overall_level == "escalate":
                 decision_action = "escalated"
+            elif quiet_hours_active:
+                decision_action = "quiet_hours_deferred"
 
             self.db.insert_decision(
                 account_id=aid,
@@ -339,23 +369,32 @@ class Orchestrator:
                 alert_id=alert_id,
             )
 
-            slack_result = self.slack.send_alert(account, self.db.get_alert(alert_id) or {})
-            self.db.insert_decision(
-                account_id=aid,
-                actor="system",
-                action="slack_notify",
-                payload={"alert_id": alert_id, "result": slack_result},
-                alert_id=alert_id,
-            )
-            if not slack_result.get("ok"):
-                self.monitor.emit(
-                    "warning",
-                    "slack_notify_failed",
-                    "Slack notification failed",
+            if quiet_hours_active:
+                self.db.insert_decision(
                     account_id=aid,
+                    actor="system",
+                    action="slack_notify_deferred",
+                    payload={"alert_id": alert_id, "reason": "quiet_hours"},
                     alert_id=alert_id,
-                    details=slack_result,
                 )
+            else:
+                slack_result = self.slack.send_alert(account, self.db.get_alert(alert_id) or {})
+                self.db.insert_decision(
+                    account_id=aid,
+                    actor="system",
+                    action="slack_notify",
+                    payload={"alert_id": alert_id, "result": slack_result},
+                    alert_id=alert_id,
+                )
+                if not slack_result.get("ok"):
+                    self.monitor.emit(
+                        "warning",
+                        "slack_notify_failed",
+                        "Slack notification failed",
+                        account_id=aid,
+                        alert_id=alert_id,
+                        details=slack_result,
+                    )
 
         summary = {
             "ok": True,
@@ -382,13 +421,15 @@ class Orchestrator:
         if not alert:
             raise ValueError(f"Alert {alert_id} not found")
 
-        if decision not in {"approve", "dismiss", "modify"}:
-            raise ValueError("Decision must be one of: approve, dismiss, modify")
+        if decision not in {"approve", "dismiss", "modify", "rollback"}:
+            raise ValueError("Decision must be one of: approve, dismiss, modify, rollback")
 
         alert_actions = self.db.actions_for_alert(alert_id)
         account_id = int(alert["account_id"])
         modifications = modifications or {}
         executed = 0
+        rolled_back = 0
+        rollback_blocked = 0
 
         if decision == "dismiss":
             for raw in alert_actions:
@@ -411,6 +452,58 @@ class Orchestrator:
                 details={"actor": actor},
             )
             return {"ok": True, "alert_id": alert_id, "decision": "dismiss", "executed_actions": executed}
+
+        if decision == "rollback":
+            if str(alert.get("status", "")) != "executed":
+                raise ValueError("Rollback is only available for executed alerts")
+            for raw in alert_actions:
+                if raw["status"] != "executed":
+                    continue
+                action = ActionRecord(
+                    id=int(raw["id"]),
+                    account_id=int(raw["account_id"]),
+                    action_type=str(raw["action_type"]),
+                    params=json.loads(raw["params_json"]),
+                    status=str(raw["status"]),
+                )
+                result = self.actions.rollback(action, source=actor)
+                if result.get("ok"):
+                    rolled_back += 1
+                else:
+                    rollback_blocked += 1
+
+            next_status = "rolled_back"
+            if rolled_back == 0 and rollback_blocked > 0:
+                next_status = "rollback_blocked"
+            elif rollback_blocked > 0:
+                next_status = "rollback_partial"
+            self.db.update_alert_status(alert_id, next_status)
+            self.db.insert_decision(
+                account_id=account_id,
+                actor=actor,
+                action="rollback",
+                payload={
+                    "alert_id": alert_id,
+                    "rolled_back": rolled_back,
+                    "rollback_blocked": rollback_blocked,
+                },
+                alert_id=alert_id,
+            )
+            self.monitor.emit(
+                "info",
+                "alert_rollback_applied",
+                "Alert rollback applied",
+                account_id=account_id,
+                alert_id=alert_id,
+                details={"actor": actor, "rolled_back": rolled_back, "rollback_blocked": rollback_blocked},
+            )
+            return {
+                "ok": rollback_blocked == 0,
+                "alert_id": alert_id,
+                "decision": "rollback",
+                "rolled_back_actions": rolled_back,
+                "rollback_blocked_actions": rollback_blocked,
+            }
 
         # For modify, create replacement action when relevant.
         if decision == "modify":

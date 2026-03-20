@@ -1,3 +1,8 @@
+const PAGE_PATHS = {
+  alerts: "/alerts",
+  campaigns: "/campaigns/draft",
+};
+
 const state = {
   health: null,
   accounts: [],
@@ -6,38 +11,72 @@ const state = {
   actions: [],
   weeklyReport: null,
   thresholds: [],
+  notifications: [],
   selectedAccountId: null,
   selectedAlertId: null,
   selectedAccountDetail: null,
-  draftPreview: null,
+  selectedDraftId: null,
+  draftList: [],
+  selectedDraft: null,
   lastSyncAt: null,
   currentPage: "alerts",
   pendingDecisions: new Set(),
+  notificationTrayOpen: false,
+  explainDrawerOpen: false,
+  notificationSeenAt: localStorage.getItem("adsGenie.notificationSeenAt") || "",
+  draftForm: {
+    prompt: "",
+    campaignGoal: "Lead generation",
+    targetGeography: "",
+    monthlyBudget: "",
+    files: [],
+  },
+  changeRequestOpen: false,
+  changeRequestNote: "",
 };
 
 const el = {
   shell: document.querySelector(".shell"),
+  navTabs: document.querySelectorAll(".nav-tab"),
   accountRail: document.getElementById("accountRail"),
   runMonitoringBtn: document.getElementById("runMonitoringBtn"),
-  generateDraftBtn: document.getElementById("generateDraftBtn"),
-  generateWeeklyBtn: document.getElementById("generateWeeklyBtn"),
-  calibrateThresholdsBtn: document.getElementById("calibrateThresholdsBtn"),
-  loadWeeklyBtn: document.getElementById("loadWeeklyBtn"),
-  refreshSelectedBtn: document.getElementById("refreshSelectedBtn"),
   accountsMonitored: document.getElementById("accountsMonitored"),
   lastSyncLabel: document.getElementById("lastSyncLabel"),
   selectedAccountMeta: document.getElementById("selectedAccountMeta"),
   selectedAccountTitle: document.getElementById("selectedAccountTitle"),
   monitoringStatus: document.getElementById("monitoringStatus"),
+  flashHost: document.getElementById("flashHost"),
+  alertsPage: document.getElementById("alertsPage"),
+  campaignPage: document.getElementById("campaignPage"),
   metricCards: document.getElementById("metricCards"),
   queueSummary: document.getElementById("queueSummary"),
   alertFeed: document.getElementById("alertFeed"),
-  weeklyReport: document.getElementById("weeklyReport"),
   systemStatus: document.getElementById("systemStatus"),
-  flashHost: document.getElementById("flashHost"),
-  inspectorTitle: document.getElementById("inspectorTitle"),
-  inspectorBody: document.getElementById("inspectorBody"),
-  navTabs: document.querySelectorAll(".nav-tab"),
+  weeklyReport: document.getElementById("weeklyReport"),
+  calibrateThresholdsBtn: document.getElementById("calibrateThresholdsBtn"),
+  generateWeeklyBtn: document.getElementById("generateWeeklyBtn"),
+  loadWeeklyBtn: document.getElementById("loadWeeklyBtn"),
+  notificationToggle: document.getElementById("notificationToggle"),
+  notificationCount: document.getElementById("notificationCount"),
+  notificationTray: document.getElementById("notificationTray"),
+  closeNotificationTray: document.getElementById("closeNotificationTray"),
+  notificationList: document.getElementById("notificationList"),
+  campaignPageTitle: document.getElementById("campaignPageTitle"),
+  draftSelector: document.getElementById("draftSelector"),
+  refreshDraftsBtn: document.getElementById("refreshDraftsBtn"),
+  buildCampaignBtn: document.getElementById("buildCampaignBtn"),
+  campaignPromptInput: document.getElementById("campaignPromptInput"),
+  campaignGoalInput: document.getElementById("campaignGoalInput"),
+  campaignGeoInput: document.getElementById("campaignGeoInput"),
+  campaignBudgetInput: document.getElementById("campaignBudgetInput"),
+  campaignFilesInput: document.getElementById("campaignFilesInput"),
+  campaignFileList: document.getElementById("campaignFileList"),
+  campaignContextHint: document.getElementById("campaignContextHint"),
+  campaignEmptyState: document.getElementById("campaignEmptyState"),
+  campaignWorkspace: document.getElementById("campaignWorkspace"),
+  campaignExplainDrawer: document.getElementById("campaignExplainDrawer"),
+  campaignExplainBody: document.getElementById("campaignExplainBody"),
+  closeExplainDrawer: document.getElementById("closeExplainDrawer"),
 };
 
 function escapeHtml(value) {
@@ -71,8 +110,6 @@ function renderErrorCard(target, message) {
   target.appendChild(node);
 }
 
-// ─── API ───────────────────────────────────────────────────────────────
-
 async function api(path, options = {}) {
   const response = await fetch(path, {
     headers: { "Content-Type": "application/json" },
@@ -89,37 +126,10 @@ function showFlash(message, tone = "info") {
   if (!el.flashHost) return;
   const node = document.createElement("div");
   node.className = `flash ${tone}`;
-  node.textContent = message;
+  node.textContent = String(message || "Update complete");
   el.flashHost.appendChild(node);
-  setTimeout(() => {
-    node.remove();
-  }, 4200);
+  setTimeout(() => node.remove(), 4200);
 }
-
-// ─── SELECTORS ─────────────────────────────────────────────────────────
-
-function selectedAccount() {
-  return state.accounts.find((a) => Number(a.id) === Number(state.selectedAccountId)) || null;
-}
-
-function selectedAlert() {
-  return state.alerts.find((a) => Number(a.id) === Number(state.selectedAlertId)) || null;
-}
-
-function accountAlerts(accountId) {
-  return state.alerts
-    .filter((a) => Number(a.account_id) === Number(accountId))
-    .sort((a, b) => {
-      const order = { open: 0, escalated: 1, executed: 2, dismissed: 3 };
-      return (order[a.status] ?? 9) - (order[b.status] ?? 9);
-    });
-}
-
-function accountActions(accountId) {
-  return state.actions.filter((a) => Number(a.account_id) === Number(accountId));
-}
-
-// ─── FORMATTERS ─────────────────────────────────────────────────────────
 
 function formatCurrency(value) {
   const number = Number(value || 0);
@@ -134,12 +144,15 @@ function formatNumber(value, decimals = 1) {
   return Number(value || 0).toFixed(decimals);
 }
 
-function signDelta(current, previous, suffix = "%") {
-  const cur = Number(current || 0);
-  const prev = Number(previous || 0);
-  if (!prev) return `new ${suffix === "x" ? "signal" : "baseline"}`;
-  const delta = ((cur - prev) / Math.abs(prev)) * 100;
-  return `${delta >= 0 ? "+" : ""}${delta.toFixed(1)}% WoW`;
+function formatPercent(value, decimals = 1) {
+  return `${Number(value || 0).toFixed(decimals)}%`;
+}
+
+function humanFileSize(bytes) {
+  const size = Number(bytes || 0);
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function timeAgo(value) {
@@ -153,8 +166,37 @@ function timeAgo(value) {
   return `${Math.round(hours / 24)}d ago`;
 }
 
+function signDelta(current, previous, suffix = "%") {
+  const cur = Number(current || 0);
+  const prev = Number(previous || 0);
+  if (!prev) return `new ${suffix === "x" ? "signal" : "baseline"}`;
+  const delta = ((cur - prev) / Math.abs(prev)) * 100;
+  return `${delta >= 0 ? "+" : ""}${delta.toFixed(1)}% WoW`;
+}
+
 function statusClass(value) {
   return String(value || "none").toLowerCase();
+}
+
+function selectedAccount() {
+  return state.accounts.find((account) => Number(account.id) === Number(state.selectedAccountId)) || null;
+}
+
+function selectedAlert() {
+  return state.alerts.find((alert) => Number(alert.id) === Number(state.selectedAlertId)) || null;
+}
+
+function accountAlerts(accountId) {
+  return state.alerts
+    .filter((alert) => Number(alert.account_id) === Number(accountId))
+    .sort((left, right) => {
+      const order = { open: 0, escalated: 1, executed: 2, dismissed: 3, rolled_back: 4 };
+      return (order[left.status] ?? 9) - (order[right.status] ?? 9);
+    });
+}
+
+function accountActions(accountId) {
+  return state.actions.filter((action) => Number(action.account_id) === Number(accountId));
 }
 
 function alertTags(alert) {
@@ -175,39 +217,128 @@ function primaryAlertAction(alert) {
   return alert?.recommendation?.actions?.[0] || null;
 }
 
-function activeInspectorPayload() {
-  const alert = selectedAlert();
-  const draftFromAlert = alert?.recommendation?.actions?.find(
-    (a) => a.action_type === "draft_campaign"
-  )?.params;
-  if (draftFromAlert) return { mode: "draft", draft: draftFromAlert, alert };
-  if (state.draftPreview) return { mode: "draft", draft: state.draftPreview, alert: null };
-  if (alert) return { mode: "review", alert };
-  return null;
+function unreadNotificationCount() {
+  return state.notifications.filter((item) => !state.notificationSeenAt || String(item.created_at) > state.notificationSeenAt).length;
 }
 
-// ─── DATA LOADING ────────────────────────────────────────────────────────
+function currentRoute() {
+  const { pathname, search } = window.location;
+  const query = new URLSearchParams(search);
+  const match = pathname.match(/^\/campaigns\/draft\/(\d+)$/);
+  return {
+    page: pathname.startsWith("/campaigns/draft") ? "campaigns" : "alerts",
+    draftId: match ? Number(match[1]) : Number(query.get("draft") || 0) || null,
+  };
+}
+
+function syncRoute(replace = false) {
+  let path = PAGE_PATHS[state.currentPage] || PAGE_PATHS.alerts;
+  if (state.currentPage === "campaigns" && state.selectedDraftId) {
+    path = `/campaigns/draft/${state.selectedDraftId}`;
+  }
+  if (`${window.location.pathname}${window.location.search}` === path) return;
+  window.history[replace ? "replaceState" : "pushState"]({}, "", path);
+}
+
+function switchPage(page, { replace = false } = {}) {
+  state.currentPage = page === "campaigns" ? "campaigns" : "alerts";
+  el.shell.setAttribute("data-page", state.currentPage);
+  el.navTabs.forEach((tab) => {
+    tab.classList.toggle("active", tab.dataset.page === state.currentPage);
+  });
+  syncRoute(replace);
+  render();
+}
+
+function updateDraftFormFromInputs() {
+  state.draftForm.prompt = el.campaignPromptInput.value;
+  state.draftForm.campaignGoal = el.campaignGoalInput.value;
+  state.draftForm.targetGeography = el.campaignGeoInput.value;
+  state.draftForm.monthlyBudget = el.campaignBudgetInput.value;
+}
+
+function defaultBudgetForAccount(account) {
+  return Math.max(2500, Math.round((account?.health?.metrics?.spend_7d || 0) * 4.2));
+}
+
+function resetDraftForm(account, { preservePrompt = false } = {}) {
+  state.draftForm = {
+    prompt: preservePrompt ? state.draftForm.prompt : "",
+    campaignGoal: "Lead generation",
+    targetGeography: account ? `${account.name} +25mi` : "",
+    monthlyBudget: account ? String(defaultBudgetForAccount(account)) : "3000",
+    files: [],
+  };
+}
+
+function syncDraftFormFromDraft(draft) {
+  const account = selectedAccount();
+  state.draftForm = {
+    prompt: draft?.prompt_text || "",
+    campaignGoal: draft?.campaign_goal || "Lead generation",
+    targetGeography: draft?.target_geography || (account ? `${account.name} +25mi` : ""),
+    monthlyBudget: String(Math.round(Number(draft?.monthly_budget || defaultBudgetForAccount(account)))),
+    files: [],
+  };
+}
 
 async function loadHealth() {
   const payload = await api("/api/health");
   state.health = payload;
 }
 
-async function loadDashboard() {
-  const [accountsPayload, alertsPayload, decisionsPayload, actionsPayload, weeklyPayload, thresholdsPayload] =
-    await Promise.all([
-      api("/api/accounts"),
-      api("/api/alerts"),
-      api("/api/decisions"),
-      api("/api/actions"),
-      api("/api/reports/weekly/latest").catch(() => ({ report: null })),
-      api("/api/thresholds").catch(() => ({ thresholds: [] })),
-    ]);
+async function loadNotifications() {
+  const payload = await api("/api/notifications?limit=20").catch(() => ({ notifications: [] }));
+  state.notifications = payload.notifications || [];
+}
+
+async function loadSelectedAccountDetail() {
+  const account = selectedAccount();
+  if (!account) {
+    state.selectedAccountDetail = null;
+    return;
+  }
+  const payload = await api(`/api/accounts/${account.id}`);
+  state.selectedAccountDetail = payload;
+}
+
+async function loadDraftsForSelectedAccount(preferredDraftId = null) {
+  const account = selectedAccount();
+  if (!account) {
+    state.draftList = [];
+    state.selectedDraftId = null;
+    state.selectedDraft = null;
+    return;
+  }
+  const payload = await api(`/api/accounts/${account.id}/campaign-drafts`).catch(() => ({ drafts: [] }));
+  state.draftList = payload.drafts || [];
+  let nextDraftId = preferredDraftId || state.selectedDraftId;
+  if (!state.draftList.some((draft) => Number(draft.id) === Number(nextDraftId))) {
+    nextDraftId = state.draftList[0] ? Number(state.draftList[0].id) : null;
+  }
+  state.selectedDraftId = nextDraftId;
+  state.selectedDraft = state.draftList.find((draft) => Number(draft.id) === Number(nextDraftId)) || null;
+  if (state.selectedDraft) {
+    syncDraftFormFromDraft(state.selectedDraft);
+  } else {
+    resetDraftForm(account);
+  }
+}
+
+async function loadDashboard({ preferredDraftId = null } = {}) {
+  const [accountsPayload, alertsPayload, decisionsPayload, actionsPayload, weeklyPayload, thresholdsPayload] = await Promise.all([
+    api("/api/accounts"),
+    api("/api/alerts"),
+    api("/api/decisions"),
+    api("/api/actions"),
+    api("/api/reports/weekly/latest").catch(() => ({ report: null })),
+    api("/api/thresholds").catch(() => ({ thresholds: [] })),
+  ]);
 
   state.accounts = accountsPayload.accounts || [];
   state.alerts = alertsPayload.alerts || [];
   state.decisions = decisionsPayload.decisions || [];
-  state.actions = (actionsPayload.actions || []).map((a) => ({ ...a, params: a.params || {} }));
+  state.actions = (actionsPayload.actions || []).map((action) => ({ ...action, params: action.params || {} }));
   state.weeklyReport = weeklyPayload.report || null;
   state.thresholds = thresholdsPayload.thresholds || [];
   state.lastSyncAt = new Date().toISOString();
@@ -215,33 +346,30 @@ async function loadDashboard() {
   if (!state.selectedAccountId && state.accounts.length) {
     state.selectedAccountId = Number(state.accounts[0].id);
   }
+
+  if (state.selectedAccountId && !state.accounts.some((account) => Number(account.id) === Number(state.selectedAccountId))) {
+    state.selectedAccountId = state.accounts[0] ? Number(state.accounts[0].id) : null;
+  }
+
   if (state.selectedAccountId) {
+    await Promise.all([loadSelectedAccountDetail(), loadDraftsForSelectedAccount(preferredDraftId)]);
     const alertsForAccount = accountAlerts(state.selectedAccountId);
-    if (!alertsForAccount.some((a) => Number(a.id) === Number(state.selectedAlertId))) {
+    if (!alertsForAccount.some((alert) => Number(alert.id) === Number(state.selectedAlertId))) {
       state.selectedAlertId = alertsForAccount[0] ? Number(alertsForAccount[0].id) : null;
     }
-    await loadSelectedAccountDetail();
   }
 }
 
-async function loadSelectedAccountDetail() {
-  const account = selectedAccount();
-  if (!account) { state.selectedAccountDetail = null; return; }
-  const payload = await api(`/api/accounts/${account.id}`);
-  state.selectedAccountDetail = payload;
+function renderTopBar() {
+  const isLive = Boolean(state.health?.scheduler_enabled);
+  el.monitoringStatus.className = `status-pill ${isLive ? "live" : "warn"}`;
+  el.monitoringStatus.innerHTML = `<span class="status-dot"></span>${isLive ? "Monitoring live" : "Manual mode"}`;
+  const unread = unreadNotificationCount();
+  el.notificationCount.textContent = String(unread);
+  el.notificationCount.hidden = unread === 0;
+  el.notificationToggle.setAttribute("aria-expanded", String(state.notificationTrayOpen));
+  el.notificationTray.hidden = !state.notificationTrayOpen;
 }
-
-// ─── PAGE SWITCHING ───────────────────────────────────────────────────────
-
-function switchPage(page) {
-  state.currentPage = page;
-  el.shell.setAttribute("data-page", page);
-  el.navTabs.forEach((tab) => {
-    tab.classList.toggle("active", tab.dataset.page === page);
-  });
-}
-
-// ─── RENDER: ACCOUNT RAIL ────────────────────────────────────────────────
 
 function renderAccountRail() {
   el.accountsMonitored.textContent = String(state.accounts.length);
@@ -255,7 +383,7 @@ function renderAccountRail() {
   el.accountRail.innerHTML = state.accounts
     .map((account) => {
       const alerts = accountAlerts(account.id);
-      const pending = alerts.filter((a) => ["open", "escalated"].includes(a.status)).length;
+      const pending = alerts.filter((alert) => ["open", "escalated"].includes(alert.status)).length;
       const active = Number(account.id) === Number(state.selectedAccountId);
       return `
         <button class="account-row ${active ? "active" : ""}" data-account-id="${account.id}">
@@ -271,56 +399,31 @@ function renderAccountRail() {
       `;
     })
     .join("");
-
-  el.accountRail.querySelectorAll("[data-account-id]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      state.selectedAccountId = Number(button.dataset.accountId);
-      state.draftPreview = null;
-      await loadSelectedAccountDetail();
-      const alertsForAccount = accountAlerts(state.selectedAccountId);
-      state.selectedAlertId = alertsForAccount[0] ? Number(alertsForAccount[0].id) : null;
-      render();
-    });
-  });
 }
 
-// ─── RENDER: HEADER ─────────────────────────────────────────────────────
-
-function renderHeader() {
+function renderAlertsHeader() {
   const account = selectedAccount();
-
-  // Update monitoring status pill in top nav
-  const statusEl = el.monitoringStatus;
-  const dotEl = statusEl.querySelector(".status-dot");
-  const isLive = state.health?.scheduler_enabled;
-  statusEl.className = `status-pill ${isLive ? "live" : "warn"}`;
-  if (dotEl) {
-    // dot is recreated each render via innerHTML manipulation - keep it
-  }
-  statusEl.innerHTML = `<span class="status-dot"></span>${isLive ? "Monitoring live" : "Manual mode"}`;
-
   if (!account) {
     el.selectedAccountMeta.textContent = "No account selected";
     el.selectedAccountTitle.textContent = "Ads Genie";
     return;
   }
-
   const campaigns = state.selectedAccountDetail?.campaigns || [];
   const health = account.health?.metrics || {};
   el.selectedAccountMeta.textContent = `${String(account.vertical).replaceAll("_", " ")} · ${campaigns.length} campaigns · ${formatCurrency(health.cpa_7d)} CPA`;
   el.selectedAccountTitle.textContent = account.name;
 }
 
-// ─── RENDER: METRIC CARDS ─────────────────────────────────────────────────
-
 function renderMetricCards() {
   const account = selectedAccount();
-  if (!account) { el.metricCards.innerHTML = ""; return; }
+  if (!account) {
+    el.metricCards.innerHTML = "";
+    return;
+  }
 
   const health = account.health?.metrics || {};
   const waste = account.waste?.components || {};
   const benchmark = account.health?.benchmark || {};
-
   const metrics = [
     {
       label: "Spend (7D)",
@@ -350,18 +453,16 @@ function renderMetricCards() {
 
   el.metricCards.innerHTML = metrics
     .map(
-      (m) => `
-        <article class="metric-card ${m.tone}">
-          <h4>${m.label}</h4>
-          <strong>${m.value}</strong>
-          <span class="metric-delta">${m.delta}</span>
+      (metric) => `
+        <article class="metric-card ${metric.tone}">
+          <h4>${metric.label}</h4>
+          <strong>${metric.value}</strong>
+          <span class="metric-delta">${metric.delta}</span>
         </article>
       `
     )
     .join("");
 }
-
-// ─── RENDER: ALERT FEED ───────────────────────────────────────────────────
 
 function renderAlertFeed() {
   const account = selectedAccount();
@@ -372,36 +473,23 @@ function renderAlertFeed() {
   }
 
   const alerts = accountAlerts(account.id);
-  const pendingCount = alerts.filter((a) => ["open", "escalated"].includes(a.status)).length;
-  const approvedCount = accountActions(account.id).filter((a) => a.status === "executed").length;
+  const pendingCount = alerts.filter((alert) => ["open", "escalated"].includes(alert.status)).length;
+  const approvedCount = accountActions(account.id).filter((action) => action.status === "executed").length;
   el.queueSummary.textContent = `${pendingCount} pending · ${approvedCount} approved`;
 
   if (!alerts.length) {
-    el.alertFeed.innerHTML =
-      '<div class="empty-card">No alerts right now. Monitoring is active.</div>';
+    el.alertFeed.innerHTML = '<div class="empty-card">No alerts right now. Monitoring is active.</div>';
     return;
   }
 
   el.alertFeed.innerHTML = alerts
     .map((alert) => {
       const isActive = Number(alert.id) === Number(state.selectedAlertId);
-      const isPending = state.pendingDecisions.has(Number(alert.id));
       const action = primaryAlertAction(alert);
-      const tags = alertTags(alert)
-        .map((tag) => `<span class="alert-chip">${tag}</span>`)
-        .join("");
-
-      const canAct = ["open", "escalated"].includes(alert.status) && !isPending;
-      const actionsHTML = canAct
-        ? `<div class="alert-actions">
-            <button class="action-btn primary" data-decision="approve" data-alert-id="${alert.id}">Approve</button>
-            <button class="action-btn ghost" data-decision="modify" data-alert-id="${alert.id}">Modify</button>
-            <button class="action-btn ghost" data-decision="dismiss" data-alert-id="${alert.id}">Dismiss</button>
-           </div>`
-        : isPending
-        ? `<div class="alert-actions"><span style="color:var(--muted);font-size:0.82rem">Processing...</span></div>`
-        : "";
-
+      const tags = alertTags(alert).map((tag) => `<span class="alert-chip">${tag}</span>`).join("");
+      const pending = state.pendingDecisions.has(Number(alert.id));
+      const showBuilder = action?.action_type === "draft_campaign";
+      const canAct = ["open", "escalated"].includes(alert.status) && !pending;
       return `
         <article class="alert-card severity-${statusClass(alert.severity)} status-${statusClass(alert.status)} ${isActive ? "active" : ""}" data-alert-id="${alert.id}">
           <div class="alert-top">
@@ -411,103 +499,16 @@ function renderAlertFeed() {
           <h4 class="alert-title">${alert.title}</h4>
           <p class="alert-body">${action?.reason || alert.summary}</p>
           <div class="alert-chip-row">${tags}</div>
-          <p class="alert-meta">Detected ${timeAgo(alert.created_at)} · ${alert.autonomy_level} · ${alert.recommendation?.actions?.map((a) => a.action_type).join(" · ") || "no action"}</p>
-          ${actionsHTML}
+          <p class="alert-meta">Detected ${timeAgo(alert.created_at)} · ${alert.autonomy_level} · ${alert.recommendation?.actions?.map((item) => item.action_type).join(" · ") || "no action"}</p>
+          <div class="alert-actions">
+            ${showBuilder ? `<button class="action-btn ghost" data-open-builder="${alert.id}">Open builder</button>` : ""}
+            ${canAct ? `<button class="action-btn primary" data-decision="approve" data-alert-id="${alert.id}">Approve</button><button class="action-btn ghost" data-decision="modify" data-alert-id="${alert.id}">Modify</button><button class="action-btn ghost" data-decision="dismiss" data-alert-id="${alert.id}">Dismiss</button>` : pending ? `<span class="inline-status">Processing...</span>` : ""}
+          </div>
         </article>
       `;
     })
     .join("");
-
-  // Card click → select alert + switch to Campaign Builder if draft exists
-  el.alertFeed.querySelectorAll(".alert-card").forEach((card) => {
-    card.addEventListener("click", () => {
-      state.selectedAlertId = Number(card.dataset.alertId);
-      render();
-    });
-  });
-
-  // Button clicks
-  el.alertFeed.querySelectorAll("[data-decision]").forEach((button) => {
-    button.addEventListener("click", async (event) => {
-      event.stopPropagation();
-      const alertId = Number(button.dataset.alertId);
-      const decision = button.dataset.decision;
-      if (decision === "modify") {
-        inlineModify(alertId, el.alertFeed.querySelector(`[data-alert-id="${alertId}"]`));
-      } else {
-        await applyDecision(alertId, decision);
-      }
-    });
-  });
 }
-
-// ─── INLINE MODIFY ────────────────────────────────────────────────────────
-
-function inlineModify(alertId, cardEl) {
-  if (!cardEl) return;
-  const alert = state.alerts.find((a) => Number(a.id) === Number(alertId));
-  const action = primaryAlertAction(alert);
-
-  // Remove existing actions row and append modify form
-  const existingActions = cardEl.querySelector(".alert-actions");
-  if (existingActions) existingActions.remove();
-
-  let inputHTML;
-  let modificationsBuilder;
-
-  if (action?.action_type === "add_negative_keywords") {
-    const existing = (action.params?.keywords || []).join(", ");
-    inputHTML = `<input type="text" class="modify-input" id="modifyInput-${alertId}" value="${existing}" placeholder="keywords, comma-separated" />`;
-    modificationsBuilder = (inputEl) => ({
-      keywords: inputEl.value.split(",").map((k) => k.trim()).filter(Boolean),
-    });
-  } else if (action?.action_type === "adjust_bid") {
-    inputHTML = `<input type="text" class="modify-input" id="modifyInput-${alertId}" value="${action.params?.pct_delta ?? -8}" placeholder="bid delta %" />`;
-    modificationsBuilder = (inputEl) => ({ pct_delta: Number(inputEl.value) });
-  } else {
-    inputHTML = `<input type="text" class="modify-input" id="modifyInput-${alertId}" placeholder="Modification note..." />`;
-    modificationsBuilder = (inputEl) => ({ note: inputEl.value });
-  }
-
-  const form = document.createElement("div");
-  form.className = "modify-form";
-  form.innerHTML = `
-    ${inputHTML}
-    <div class="modify-actions">
-      <button class="action-btn primary" id="modifySend-${alertId}">Send</button>
-      <button class="action-btn ghost" id="modifyCancel-${alertId}">Cancel</button>
-    </div>
-  `;
-  cardEl.appendChild(form);
-
-  const inputEl = form.querySelector(`#modifyInput-${alertId}`);
-  inputEl.focus();
-
-  form.querySelector(`#modifyCancel-${alertId}`).addEventListener("click", () => render());
-
-  form.querySelector(`#modifySend-${alertId}`).addEventListener("click", async () => {
-    const modifications = modificationsBuilder(inputEl);
-    form.querySelector(`#modifySend-${alertId}`).disabled = true;
-    form.querySelector(`#modifyCancel-${alertId}`).disabled = true;
-    try {
-      await api(`/api/alerts/${alertId}/decision`, {
-        method: "POST",
-        body: JSON.stringify({ decision: "modify", actor: "dashboard_user", modifications }),
-      });
-      await loadDashboard();
-      render();
-    } catch (err) {
-      const errorNode = document.createElement("p");
-      errorNode.style.cssText = "color:var(--danger);font-size:0.8rem;margin:4px 0 0";
-      errorNode.textContent = err.message;
-      form.appendChild(errorNode);
-      form.querySelector(`#modifySend-${alertId}`).disabled = false;
-      form.querySelector(`#modifyCancel-${alertId}`).disabled = false;
-    }
-  });
-}
-
-// ─── RENDER: WEEKLY REPORT ───────────────────────────────────────────────
 
 function renderWeeklyReport() {
   const runtime = state.health?.runtime || {};
@@ -520,16 +521,17 @@ function renderWeeklyReport() {
     : authRequired
     ? "Set APP_AUTH_USERNAME and APP_AUTH_PASSWORD before using mutating endpoints."
     : "Enable APP_AUTH_ENABLED and set APP_AUTH_PASSWORD to lock local dashboard/API.";
+
   el.systemStatus.innerHTML = `
     <div class="system-card">
       <h4>Google Ads</h4>
       <strong>${state.health?.google_ads_configured ? "Configured" : "Demo mode"}</strong>
-      <p>Read path is ${state.health?.google_ads_configured ? "ready for live accounts" : "still using demo fallback"}.</p>
+      <p>${state.health?.google_ads_configured ? "Read path is ready for live accounts." : "Still using demo fallback data."}</p>
     </div>
     <div class="system-card">
       <h4>Slack</h4>
       <strong>${state.health?.slack_configured ? "Configured" : "Not configured"}</strong>
-      <p>Interactive approvals are ${state.health?.slack_configured ? "wired in backend" : "implemented but waiting on credentials"}.</p>
+      <p>${state.health?.slack_configured ? "Interactive approvals are wired." : "Interactive approvals are implemented but waiting on credentials."}</p>
     </div>
     <div class="system-card">
       <h4>Auth</h4>
@@ -544,19 +546,15 @@ function renderWeeklyReport() {
   `;
 
   if (!state.weeklyReport) {
-    el.weeklyReport.innerHTML =
-      '<div class="empty-card">No weekly report yet. Click refresh to generate one.</div>';
+    el.weeklyReport.innerHTML = '<div class="empty-card">No weekly report yet. Click refresh to generate one.</div>';
     return;
   }
 
   const content = state.weeklyReport.content_markdown || "";
   const lines = content.split("\n").filter(Boolean);
-  const accountsReviewed = (lines.find((l) => l.includes("Accounts reviewed")) || "")
-    .split(":").pop()?.trim() || "-";
-  const highFlags = (lines.find((l) => l.includes("High/Critical health flags")) || "")
-    .split(":").pop()?.trim() || "-";
-  const criticalFlags = (lines.find((l) => l.includes("Critical health flags")) || "")
-    .split(":").pop()?.trim() || "-";
+  const accountsReviewed = (lines.find((line) => line.includes("Accounts reviewed")) || "").split(":").pop()?.trim() || "-";
+  const highFlags = (lines.find((line) => line.includes("High/Critical health flags")) || "").split(":").pop()?.trim() || "-";
+  const criticalFlags = (lines.find((line) => line.includes("Critical health flags")) || "").split(":").pop()?.trim() || "-";
 
   el.weeklyReport.innerHTML = `
     <div class="report-shell">
@@ -572,309 +570,409 @@ function renderWeeklyReport() {
   `;
 }
 
-// ─── RENDER: INSPECTOR (CAMPAIGN BUILDER) ────────────────────────────────
-
-function renderDraftInspector(draft, alert) {
-  const canReview = Boolean(alert) && ["open", "escalated"].includes(alert.status);
-  const adGroups = draft.ad_groups || [];
-  const benchmark = draft.benchmark_comparison || {};
-  el.inspectorTitle.textContent = alert ? "Campaign Draft — Review Required" : "Draft Preview";
-
-  el.inspectorBody.innerHTML = `
-    <div class="draft-shell">
-      <div class="draft-card">
-        <div class="inspector-top">
-          <div>
-            <h4>${draft.campaign_name || "Draft campaign"}</h4>
-            <p>Generated by ${draft.tool || "draft_campaign"} · ${draft.methodology || "STAG"} methodology · ${draft.vertical_defaults || draft.vertical || "general"} defaults</p>
-          </div>
-          <span class="review-pill">DRAFT · REVIEW REQUIRED</span>
-        </div>
-      </div>
-
-      <div class="draft-card">
-        <p>Autonomy level: Draft &amp; Review — nothing executes until you approve.</p>
-      </div>
-
-      <div class="inspector-grid">
-        <div class="draft-card">
-          <p class="section-kicker">Ad groups — STAG structure (${adGroups.length})</p>
-          ${adGroups
-            .map(
-              (group) => `
-              <article class="ad-group-card">
-                <div class="alert-top">
-                  <h4 class="ad-group-title">${group.ad_group}</h4>
-                  <span class="ad-group-meta">${group.keywords.length} keywords · ${formatCurrency(group.monthly_budget)} / mo</span>
-                </div>
-                ${group.keywords
-                  .map(
-                    (kw) => `
-                  <div class="keyword-item">
-                    <span>${kw.text}</span>
-                    <div class="keyword-row">
-                      <span class="match-chip ${statusClass(kw.match_type)}">${kw.match_type}</span>
-                      <span>${formatCurrency(kw.max_cpc)}</span>
-                    </div>
-                  </div>`
-                  )
-                  .join("")}
-              </article>`
-            )
-            .join("")}
-
-          <div class="rsa-block">
-            <p class="section-kicker">Responsive search ad</p>
-            <div class="headline-list">
-              ${(draft.responsive_search_ad?.headlines || []).map((h) => `<span class="headline-item">${h}</span>`).join("")}
-            </div>
-            <div class="description-list">
-              ${(draft.responsive_search_ad?.descriptions || []).map((d) => `<span class="description-item">${d}</span>`).join("")}
-            </div>
-            <div class="rsa-meta">
-              <span class="account-health-meta">Predicted ad strength</span>
-              <strong>${draft.responsive_search_ad?.predicted_ad_strength || "Good"}</strong>
-            </div>
-          </div>
-        </div>
-
-        <div class="draft-shell">
-          <div class="settings-card">
-            <p class="section-kicker">Campaign settings</p>
-            <div class="settings-row"><span>Daily budget</span><strong>${formatCurrency(draft.daily_budget)}</strong></div>
-            <div class="settings-row"><span>Bidding</span><strong>${draft.bid_strategy || "Max Conversions"}</strong></div>
-            <div class="settings-row"><span>Target CPA</span><strong>${formatCurrency(draft.target_cpa)}</strong></div>
-            <div class="settings-row"><span>Geo target</span><strong>${draft.target_geography || "Local radius"}</strong></div>
-            <div class="settings-row"><span>Network</span><strong>${draft.network || "Search only"}</strong></div>
-            <div class="settings-row"><span>Ad schedule</span><strong>${draft.ad_schedule || "All week"}</strong></div>
-            <div class="settings-row"><span>Vertical defaults</span><strong>${draft.vertical_defaults || draft.vertical || "General"}</strong></div>
-          </div>
-
-          <div class="settings-card">
-            <p class="section-kicker">Benchmark comparison</p>
-            <div class="settings-row"><span>Portfolio avg. CPA</span><strong>${formatCurrency(benchmark.portfolio_avg_cpa)}</strong></div>
-            <div class="settings-row"><span>Vertical avg. ROAS</span><strong>${formatNumber(benchmark.vertical_avg_roas, 1)}x</strong></div>
-            <div class="settings-row"><span>Predicted ROAS</span><strong>${formatNumber(benchmark.predicted_roas_min, 1)}–${formatNumber(benchmark.predicted_roas_max, 1)}x</strong></div>
-          </div>
-
-          <div class="note-card">
-            <p>${draft.kal_note || "Review this draft as a reference artifact before any manual launch."}</p>
-          </div>
-
-          <div class="settings-card">
-            <p class="section-kicker">Shared negatives applied</p>
-            <div class="negatives-row">
-              ${(draft.shared_negatives || []).slice(0, 16).map((kw) => `<span class="negative-item">${kw}</span>`).join("")}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      ${
-        canReview
-          ? `<div class="draft-card">
-              <div class="alert-actions">
-                <button class="action-btn primary" data-inspector-decision="approve" data-alert-id="${alert.id}">Approve</button>
-                <button class="action-btn ghost" data-inspector-decision="modify" data-alert-id="${alert.id}">Modify</button>
-                <button class="action-btn ghost" data-inspector-decision="dismiss" data-alert-id="${alert.id}">Dismiss</button>
-              </div>
-             </div>`
-          : ""
-      }
-    </div>
-  `;
-
-  bindInspectorDecisionButtons();
-}
-
-function renderReviewInspector(alert) {
-  const actionItems = alert.recommendation?.actions || [];
-  const context = alert.context || {};
-  const health = context.health_check?.metrics || {};
-  const waste = context.budget_waste?.components || {};
-  const roas = context.roas_drop?.roas || {};
-  const negatives = state.selectedAccountDetail?.negatives || [];
-
-  el.inspectorTitle.textContent = "Action Review";
-  el.inspectorBody.innerHTML = `
-    <div class="review-shell">
-      <div class="review-card">
-        <div class="inspector-top">
-          <div>
-            <h4>${alert.title}</h4>
-            <p>${alert.summary}</p>
-          </div>
-          <span class="status-tag ${statusClass(alert.status)}">${alert.status}</span>
-        </div>
-      </div>
-
-      <div class="inspector-grid">
-        <div class="review-card">
-          <p class="section-kicker">Recommended actions</p>
-          ${actionItems
-            .map(
-              (item) => `
-              <article class="ad-group-card">
-                <div class="alert-top">
-                  <h4>${String(item.action_type).replaceAll("_", " ")}</h4>
-                  <span class="status-tag open">${item.risk || "review"}</span>
-                </div>
-                <p style="color:var(--soft);font-size:0.84rem;margin:6px 0;">${item.reason || "No reason supplied."}</p>
-                <pre style="font-family:'IBM Plex Mono',monospace;font-size:0.76rem;color:var(--muted);margin:8px 0 0;white-space:pre-wrap;">${JSON.stringify(item.params || {}, null, 2)}</pre>
-              </article>`
-            )
-            .join("")}
-        </div>
-
-        <div class="draft-shell">
-          <div class="context-card">
-            <p class="section-kicker">Performance snapshot</p>
-            <div class="context-grid">
-              <div class="context-pill">ROAS 7D: ${formatNumber(health.roas_7d, 1)}x</div>
-              <div class="context-pill">CPA 7D: ${formatCurrency(health.cpa_7d)}</div>
-              <div class="context-pill">Wasted: ${formatCurrency(waste.estimated_total_waste)}</div>
-              <div class="context-pill">ROAS drop: ${formatNumber(roas.drop_pct, 1)}%</div>
-            </div>
-          </div>
-
-          <div class="settings-card">
-            <p class="section-kicker">Existing negatives</p>
-            <div class="negatives-row">
-              ${
-                negatives.length
-                  ? negatives.slice(0, 14).map((n) => `<span class="negative-item">${n.keyword}</span>`).join("")
-                  : '<span class="negative-item">None recorded yet</span>'
-              }
-            </div>
-          </div>
-
-          <div class="draft-card">
-            <div class="alert-actions">
-              <button class="action-btn primary" data-inspector-decision="approve" data-alert-id="${alert.id}">Approve</button>
-              <button class="action-btn ghost" data-inspector-decision="modify" data-alert-id="${alert.id}">Modify</button>
-              <button class="action-btn ghost" data-inspector-decision="dismiss" data-alert-id="${alert.id}">Dismiss</button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
-
-  bindInspectorDecisionButtons();
-}
-
-function renderInspector() {
-  const payload = activeInspectorPayload();
-  if (!payload) {
-    el.inspectorTitle.textContent = "Select an alert or generate a draft";
-    el.inspectorBody.innerHTML = `
-      <div class="inspector-empty">
-        <div>
-          <p class="section-kicker">No review item selected</p>
-          <p style="margin-top:8px;color:var(--muted)">Choose an account alert from the queue or click Generate draft for the selected account.</p>
-        </div>
-      </div>
-    `;
+function renderNotificationTray() {
+  if (!state.notifications.length) {
+    el.notificationList.innerHTML = '<div class="empty-card">No notifications yet.</div>';
     return;
   }
 
-  if (payload.mode === "draft") {
-    renderDraftInspector(payload.draft, payload.alert);
-  } else {
-    renderReviewInspector(payload.alert);
+  el.notificationList.innerHTML = state.notifications
+    .map(
+      (item) => `
+        <button class="notification-card ${statusClass(item.severity)}" data-notification-id="${item.id}" data-kind="${item.kind}" data-account-id="${item.account_id || ""}" data-draft-id="${item.draft_id || ""}">
+          <div class="notification-card-top">
+            <span class="notification-kind">${String(item.kind || "system").replaceAll("_", " ")}</span>
+            <span class="notification-time">${timeAgo(item.created_at)}</span>
+          </div>
+          <strong>${item.title || "Update"}</strong>
+          <p>${item.body || "No detail provided."}</p>
+        </button>
+      `
+    )
+    .join("");
+}
+
+function renderDraftSelector() {
+  if (!state.draftList.length) {
+    el.draftSelector.innerHTML = '<option value="">No drafts</option>';
+    el.draftSelector.disabled = true;
+    return;
   }
+  el.draftSelector.disabled = false;
+  el.draftSelector.innerHTML = state.draftList
+    .map((draft) => {
+      const selected = Number(draft.id) === Number(state.selectedDraftId) ? "selected" : "";
+      return `<option value="${draft.id}" ${selected}>#${draft.id} · ${draft.draft?.campaign_name || draft.campaign_goal} · ${draft.status}</option>`;
+    })
+    .join("");
 }
 
-function bindInspectorDecisionButtons() {
-  el.inspectorBody.querySelectorAll("[data-inspector-decision]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      const alertId = Number(button.dataset.alertId);
-      const decision = button.dataset.inspectorDecision;
-      if (decision === "modify") {
-        const cardInInspector = button.closest(".draft-card, .review-card");
-        inlineModify(alertId, cardInInspector || el.inspectorBody);
-      } else {
-        await applyDecision(alertId, decision);
-      }
-    });
-  });
+function renderDraftForm() {
+  el.campaignPromptInput.value = state.draftForm.prompt || "";
+  el.campaignGoalInput.value = state.draftForm.campaignGoal || "";
+  el.campaignGeoInput.value = state.draftForm.targetGeography || "";
+  el.campaignBudgetInput.value = state.draftForm.monthlyBudget || "";
+
+  if (!state.draftForm.files.length) {
+    el.campaignFileList.innerHTML = '<span class="file-chip muted">No files attached</span>';
+    return;
+  }
+  el.campaignFileList.innerHTML = state.draftForm.files
+    .map(
+      (file, index) => `
+        <span class="file-chip">
+          <span>${file.name}</span>
+          <small>${humanFileSize(file.size)}</small>
+          <button class="file-remove" data-file-index="${index}" aria-label="Remove ${file.name}">×</button>
+        </span>
+      `
+    )
+    .join("");
 }
 
-// ─── APPLY DECISION ───────────────────────────────────────────────────────
+function renderCampaignEmptyState() {
+  const hasDraft = Boolean(state.selectedDraft);
+  el.campaignEmptyState.hidden = hasDraft;
+  if (hasDraft) {
+    el.campaignEmptyState.innerHTML = "";
+    return;
+  }
 
-async function applyDecision(alertId, decision) {
-  const alert = state.alerts.find((a) => Number(a.id) === Number(alertId));
+  el.campaignEmptyState.innerHTML = `
+    <div class="empty-state-block">
+      <p class="section-kicker">No pending draft</p>
+      <h3>No campaign drafts pending.</h3>
+      <p>Drafts are generated automatically when the system recommends a new campaign. You can also build one manually using the intake block above.</p>
+    </div>
+  `;
+}
+
+function renderExplainDrawer() {
+  const draft = state.selectedDraft;
+  el.campaignExplainDrawer.hidden = !state.explainDrawerOpen;
+  if (!state.explainDrawerOpen || !draft) {
+    el.campaignExplainBody.innerHTML = "";
+    return;
+  }
+  const explanation = draft.draft?.structure_explanation || {};
+  const bullets = explanation.bullets || [];
+  el.campaignExplainBody.innerHTML = `
+    <div class="drawer-panel">
+      <h4>${explanation.title || "Why this draft exists"}</h4>
+      <ul class="drawer-list">
+        ${bullets.map((item) => `<li>${item}</li>`).join("")}
+      </ul>
+      <div class="drawer-note">
+        <strong>Context summary</strong>
+        <p>${draft.context_summary || draft.draft?.kal_note || "No additional context was recorded."}</p>
+      </div>
+    </div>
+  `;
+}
+
+function renderCampaignWorkspace() {
+  const account = selectedAccount();
+  const draft = state.selectedDraft;
+  el.campaignPageTitle.textContent = account ? `${account.name} campaign drafts` : "Draft and launch flow";
+  renderDraftSelector();
+  renderDraftForm();
+  renderCampaignEmptyState();
+  renderExplainDrawer();
+
+  if (!draft) {
+    el.campaignWorkspace.innerHTML = "";
+    return;
+  }
+
+  const details = draft.draft || {};
+  const adGroups = details.ad_groups || [];
+  const benchmark = details.benchmark_comparison || {};
+  const fileTags = (draft.files || []).map((file) => `<span class="negative-item">${file.filename}</span>`).join("");
+  const sharedNegatives = (details.shared_negatives || []).slice(0, 12).map((keyword) => `<span class="negative-item">${keyword}</span>`).join("");
+  const sourceMemory = (details.source_context?.memory || []).map((item) => `<div class="context-pill">${item.memory_key}: ${item.memory_value}</div>`).join("");
+
+  el.campaignWorkspace.innerHTML = `
+    <div class="campaign-workspace-grid">
+      <section class="panel campaign-left-rail">
+        <div class="panel-head">
+          <div>
+            <p class="section-kicker">Draft Structure</p>
+            <h3>${details.campaign_name || "Draft campaign"}</h3>
+          </div>
+          <span class="review-pill">${draft.status.toUpperCase()}</span>
+        </div>
+        <div class="draft-summary-row">
+          <span>${details.methodology || "STAG"} methodology</span>
+          <span>${details.vertical_defaults || details.vertical || "General"}</span>
+          <span>${details.status_message || "Nothing executes until you approve"}</span>
+        </div>
+        <div class="ad-group-stack">
+          ${adGroups
+            .map(
+              (group) => `
+                <article class="ad-group-card">
+                  <div class="alert-top">
+                    <h4 class="ad-group-title">${group.ad_group}</h4>
+                    <span class="ad-group-meta">${group.keywords.length} keywords · ${formatCurrency(group.monthly_budget)} / mo</span>
+                  </div>
+                  ${group.keywords
+                    .map(
+                      (keyword) => `
+                        <div class="keyword-item">
+                          <span class="mono">${keyword.text}</span>
+                          <div class="keyword-row">
+                            <span class="match-chip ${statusClass(keyword.match_type)}">${keyword.match_type}</span>
+                            <span>${formatCurrency(keyword.max_cpc)}</span>
+                          </div>
+                        </div>
+                      `
+                    )
+                    .join("")}
+                </article>
+              `
+            )
+            .join("")}
+        </div>
+        <div class="rsa-block">
+          <p class="section-kicker">Responsive search ad</p>
+          <div class="headline-list">${(details.responsive_search_ad?.headlines || []).map((headline) => `<span class="headline-item">${headline}</span>`).join("")}</div>
+          <div class="description-list">${(details.responsive_search_ad?.descriptions || []).map((description) => `<span class="description-item">${description}</span>`).join("")}</div>
+          <div class="progress-row">
+            <div class="progress-bar"><span style="width:82%"></span></div>
+            <strong>${details.responsive_search_ad?.predicted_ad_strength || "Good (82%)"}</strong>
+          </div>
+        </div>
+      </section>
+
+      <aside class="campaign-right-rail">
+        <section class="panel settings-card">
+          <p class="section-kicker">Campaign settings</p>
+          <div class="settings-row"><span>Daily budget</span><strong>${formatCurrency(details.daily_budget)}</strong></div>
+          <div class="settings-row"><span>Bidding</span><strong>${details.bid_strategy || "Max Conversions"}</strong></div>
+          <div class="settings-row"><span>Target CPA</span><strong>${formatCurrency(details.target_cpa)}</strong></div>
+          <div class="settings-row"><span>Geo target</span><strong>${details.target_geography || "Local radius"}</strong></div>
+          <div class="settings-row"><span>Network</span><strong>${details.network || "Search only"}</strong></div>
+          <div class="settings-row"><span>Ad schedule</span><strong>${details.ad_schedule || "All week"}</strong></div>
+          <div class="settings-row"><span>Vertical defaults</span><strong>${details.vertical_defaults || details.vertical || "General"}</strong></div>
+        </section>
+
+        <section class="panel settings-card insight-card">
+          <p class="section-kicker">Benchmark comparison</p>
+          <div class="settings-row"><span>Portfolio avg. CPA</span><strong>${formatCurrency(benchmark.portfolio_avg_cpa)}</strong></div>
+          <div class="settings-row"><span>Target CPA this draft</span><strong>${formatCurrency(details.target_cpa)}</strong></div>
+          <div class="settings-row"><span>Vertical avg. ROAS</span><strong>${formatNumber(benchmark.vertical_avg_roas, 1)}x</strong></div>
+          <div class="settings-row"><span>Predicted ROAS</span><strong>${formatNumber(benchmark.predicted_roas_min, 1)}-${formatNumber(benchmark.predicted_roas_max, 1)}x</strong></div>
+          <div class="note-card compact">
+            <p>${details.kal_note || details.context_summary || "Review this draft before any launch step."}</p>
+          </div>
+        </section>
+
+        <section class="panel settings-card">
+          <p class="section-kicker">Shared negatives applied</p>
+          <div class="negatives-row">${sharedNegatives || '<span class="negative-item">None recorded yet</span>'}</div>
+        </section>
+
+        <section class="panel settings-card">
+          <p class="section-kicker">Reference context</p>
+          <div class="negatives-row">${fileTags || '<span class="negative-item">No files attached</span>'}</div>
+          <div class="context-grid">${sourceMemory || '<div class="context-pill">No stored account context</div>'}</div>
+        </section>
+      </aside>
+    </div>
+
+    <section class="panel action-bar-panel">
+      <div class="action-bar-main">
+        <div>
+          <p class="section-kicker">Review status</p>
+          <strong>${draft.status === "approved" ? "Campaign queued. Awaiting production push." : "Nothing executes until you approve"}</strong>
+        </div>
+        <div class="alert-actions wide-actions">
+          <button class="primary-btn" data-draft-approve="${draft.id}" ${draft.status === "approved" ? "disabled" : ""}>${draft.status === "approved" ? "Submitted for launch" : "Approve & launch"}</button>
+          <button class="ghost-btn" data-draft-modify-toggle="${draft.id}">Request changes</button>
+          <button class="ghost-btn" data-draft-explain="${draft.id}">Explain structure</button>
+        </div>
+      </div>
+      ${state.changeRequestOpen ? `
+        <div class="change-request-panel">
+          <label class="field-group field-span-2">
+            <span>Revision request</span>
+            <textarea id="changeRequestNote" rows="3" placeholder="Example: Make ad groups tighter around emergency terms and lower budget until QS improves.">${state.changeRequestNote || ""}</textarea>
+          </label>
+          <div class="alert-actions">
+            <button class="primary-btn" data-draft-submit-change="${draft.id}">Send revision</button>
+            <button class="ghost-btn" data-draft-cancel-change="${draft.id}">Cancel</button>
+          </div>
+        </div>
+      ` : ""}
+    </section>
+  `;
+}
+
+function render() {
+  renderTopBar();
+  renderAccountRail();
+  renderAlertsHeader();
+  renderMetricCards();
+  renderAlertFeed();
+  renderWeeklyReport();
+  renderNotificationTray();
+  renderCampaignWorkspace();
+}
+
+async function applyDecision(alertId, decision, modifications = {}) {
+  const alert = state.alerts.find((item) => Number(item.id) === Number(alertId));
   if (!alert) return;
-
-  // Optimistic UI: update state immediately
-  const alertIndex = state.alerts.findIndex((a) => Number(a.id) === Number(alertId));
-  const prevStatus = state.alerts[alertIndex]?.status;
+  const alertIndex = state.alerts.findIndex((item) => Number(item.id) === Number(alertId));
+  const previousStatus = state.alerts[alertIndex]?.status;
   if (alertIndex !== -1) {
     state.alerts[alertIndex] = {
       ...state.alerts[alertIndex],
-      status: decision === "approve" ? "executed" : "dismissed",
+      status: decision === "approve" ? "executed" : decision === "dismiss" ? "dismissed" : state.alerts[alertIndex].status,
     };
   }
   state.pendingDecisions.add(alertId);
   render();
-
   try {
     await api(`/api/alerts/${alertId}/decision`, {
       method: "POST",
-      body: JSON.stringify({ decision, actor: "dashboard_user", modifications: {} }),
+      body: JSON.stringify({ decision, actor: "dashboard_user", modifications }),
     });
     state.pendingDecisions.delete(alertId);
-    await loadDashboard();
+    await Promise.all([loadDashboard(), loadNotifications()]);
     render();
-    showFlash(`Alert ${decision === "approve" ? "approved" : "dismissed"}.`, "success");
-  } catch (err) {
-    // Revert optimistic update on error
-    if (alertIndex !== -1 && prevStatus) {
-      state.alerts[alertIndex] = { ...state.alerts[alertIndex], status: prevStatus };
+    showFlash(`Alert ${decision === "approve" ? "approved" : decision}.`, "success");
+  } catch (error) {
+    if (alertIndex !== -1 && previousStatus) {
+      state.alerts[alertIndex] = { ...state.alerts[alertIndex], status: previousStatus };
     }
     state.pendingDecisions.delete(alertId);
     render();
-    // Show error in alert feed
-    const card = el.alertFeed.querySelector(`[data-alert-id="${alertId}"]`);
-    if (card) {
-      const errEl = document.createElement("p");
-      errEl.style.cssText = "color:var(--danger);font-size:0.8rem;margin:6px 0 0";
-      errEl.textContent = err.message;
-      card.appendChild(errEl);
-    }
-    showFlash(err.message, "error");
+    showFlash(error.message, "error");
   }
 }
 
-// ─── ACTIONS: GENERATE DRAFT / MONITORING / REPORT ────────────────────────
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
 
-async function generateDraft() {
+async function ingestFiles(fileList) {
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+  const limit = 6 - state.draftForm.files.length;
+  const nextFiles = files.slice(0, limit);
+  if (!nextFiles.length) {
+    showFlash("File limit reached.", "error");
+    return;
+  }
+  const encoded = [];
+  for (const file of nextFiles) {
+    const buffer = await file.arrayBuffer();
+    encoded.push({
+      name: file.name,
+      type: file.type,
+      size: file.size,
+      content_base64: arrayBufferToBase64(buffer),
+    });
+  }
+  state.draftForm.files = [...state.draftForm.files, ...encoded];
+  el.campaignFilesInput.value = "";
+  renderDraftForm();
+  showFlash(`${encoded.length} file${encoded.length === 1 ? "" : "s"} added to campaign context.`, "success");
+}
+
+async function buildCampaignDraft() {
   const account = selectedAccount();
-  if (!account) return;
-
-  el.generateDraftBtn.disabled = true;
-  el.generateDraftBtn.textContent = "Generating...";
-
+  if (!account) {
+    showFlash("Select an account first.", "error");
+    return;
+  }
+  updateDraftFormFromInputs();
+  el.buildCampaignBtn.disabled = true;
+  el.buildCampaignBtn.textContent = "Building...";
   try {
-    const defaultBudget = Math.max(2500, Math.round((account.health?.metrics?.spend_7d || 0) * 4.2));
-    const payload = await api("/api/tools/run", {
+    const payload = await api("/api/campaigns/draft", {
       method: "POST",
       body: JSON.stringify({
-        tool_name: "draft_campaign",
         account_id: Number(account.id),
-        params: {
-          monthly_budget: defaultBudget,
-          campaign_goal: "Lead generation",
-          target_geography: `${account.name} +25mi`,
-        },
+        prompt: state.draftForm.prompt,
+        campaign_goal: state.draftForm.campaignGoal,
+        target_geography: state.draftForm.targetGeography,
+        monthly_budget: Number(state.draftForm.monthlyBudget || defaultBudgetForAccount(account)),
+        files: state.draftForm.files,
       }),
     });
-    state.draftPreview = payload.result;
-    renderInspector();
-    showFlash("Draft generated.", "success");
+    state.selectedDraft = payload.draft;
+    state.selectedDraftId = Number(payload.draft.id);
+    state.changeRequestOpen = false;
+    state.changeRequestNote = "";
+    await Promise.all([loadDraftsForSelectedAccount(state.selectedDraftId), loadNotifications()]);
+    switchPage("campaigns");
+    showFlash("Campaign draft built.", "success");
+  } catch (error) {
+    showFlash(error.message, "error");
   } finally {
-    el.generateDraftBtn.disabled = false;
-    el.generateDraftBtn.textContent = "Generate draft";
+    el.buildCampaignBtn.disabled = false;
+    el.buildCampaignBtn.textContent = "Build campaign";
+    render();
+  }
+}
+
+async function approveDraft(draftId) {
+  if (!window.confirm("This will submit the campaign to Google Ads. Confirm?")) {
+    return;
+  }
+  try {
+    const payload = await api(`/api/campaigns/draft/${draftId}/approve`, {
+      method: "POST",
+      body: JSON.stringify({ actor: "dashboard_user" }),
+    });
+    state.selectedDraft = payload.draft;
+    state.selectedDraftId = Number(payload.draft.id);
+    await Promise.all([loadDraftsForSelectedAccount(state.selectedDraftId), loadNotifications()]);
+    render();
+    showFlash("Campaign queued for launch.", "success");
+  } catch (error) {
+    showFlash(error.message, "error");
+  }
+}
+
+async function submitDraftChange(draftId) {
+  updateDraftFormFromInputs();
+  const noteEl = document.getElementById("changeRequestNote");
+  const note = noteEl ? noteEl.value.trim() : state.changeRequestNote.trim();
+  if (!note) {
+    showFlash("Add a revision note first.", "error");
+    return;
+  }
+  state.changeRequestNote = note;
+  try {
+    const payload = await api(`/api/campaigns/draft/${draftId}/modify`, {
+      method: "POST",
+      body: JSON.stringify({
+        actor: "dashboard_user",
+        note,
+        prompt: state.draftForm.prompt,
+        campaign_goal: state.draftForm.campaignGoal,
+        target_geography: state.draftForm.targetGeography,
+        monthly_budget: Number(state.draftForm.monthlyBudget || 0) || undefined,
+        files: state.draftForm.files.length ? state.draftForm.files : undefined,
+      }),
+    });
+    state.selectedDraft = payload.draft;
+    state.selectedDraftId = Number(payload.draft.id);
+    state.changeRequestOpen = false;
+    state.changeRequestNote = "";
+    await Promise.all([loadDraftsForSelectedAccount(state.selectedDraftId), loadNotifications()]);
+    render();
+    showFlash("Draft updated with your revision request.", "success");
+  } catch (error) {
+    showFlash(error.message, "error");
   }
 }
 
@@ -887,9 +985,11 @@ async function runMonitoring() {
       method: "POST",
       body: JSON.stringify({ account_id: account ? Number(account.id) : null }),
     });
-    await loadDashboard();
+    await Promise.all([loadDashboard(), loadNotifications()]);
     render();
     showFlash("Monitoring cycle completed.", "success");
+  } catch (error) {
+    showFlash(error.message, "error");
   } finally {
     el.runMonitoringBtn.disabled = false;
     el.runMonitoringBtn.textContent = "Run now";
@@ -908,6 +1008,8 @@ async function refreshWeeklyReport(forceGenerate = false) {
     }
     renderWeeklyReport();
     showFlash("Weekly report refreshed.", "success");
+  } catch (error) {
+    showFlash(error.message, "error");
   } finally {
     el.generateWeeklyBtn.disabled = false;
   }
@@ -934,51 +1036,215 @@ async function calibrateThresholds() {
   }
 }
 
-// ─── MAIN RENDER ──────────────────────────────────────────────────────────
-
-function render() {
-  renderAccountRail();
-  renderHeader();
-  renderMetricCards();
-  renderAlertFeed();
-  renderWeeklyReport();
-  renderInspector();
+async function selectAccount(accountId) {
+  state.selectedAccountId = Number(accountId);
+  state.selectedAlertId = null;
+  state.selectedDraftId = null;
+  state.selectedDraft = null;
+  state.changeRequestOpen = false;
+  state.changeRequestNote = "";
+  await Promise.all([loadSelectedAccountDetail(), loadDraftsForSelectedAccount()]);
+  const alertsForAccount = accountAlerts(state.selectedAccountId);
+  state.selectedAlertId = alertsForAccount[0] ? Number(alertsForAccount[0].id) : null;
+  render();
 }
 
-// ─── BIND EVENTS ─────────────────────────────────────────────────────────
+async function openNotification(item) {
+  if (item.account_id) {
+    await selectAccount(item.account_id);
+  }
+  if (item.kind === "draft" && item.draft_id) {
+    state.selectedDraftId = Number(item.draft_id);
+    state.selectedDraft = state.draftList.find((draft) => Number(draft.id) === Number(item.draft_id)) || state.selectedDraft;
+    if (state.selectedDraft) syncDraftFormFromDraft(state.selectedDraft);
+    switchPage("campaigns");
+  } else {
+    if (item.alert_id) {
+      state.selectedAlertId = Number(item.alert_id);
+    }
+    switchPage("alerts");
+  }
+  markNotificationsSeen();
+}
+
+function markNotificationsSeen() {
+  const newest = state.notifications[0]?.created_at || new Date().toISOString();
+  state.notificationSeenAt = newest;
+  localStorage.setItem("adsGenie.notificationSeenAt", newest);
+}
 
 function bindEvents() {
   el.navTabs.forEach((tab) => {
     tab.addEventListener("click", () => switchPage(tab.dataset.page));
   });
 
-  el.runMonitoringBtn.addEventListener("click", runMonitoring);
-  el.generateDraftBtn.addEventListener("click", generateDraft);
-  el.generateWeeklyBtn.addEventListener("click", () => refreshWeeklyReport(true));
-  el.calibrateThresholdsBtn.addEventListener("click", calibrateThresholds);
-  el.loadWeeklyBtn.addEventListener("click", () => refreshWeeklyReport(false));
-  el.refreshSelectedBtn.addEventListener("click", async () => {
-    el.refreshSelectedBtn.disabled = true;
-    try {
-      await loadDashboard();
-      render();
-    } finally {
-      el.refreshSelectedBtn.disabled = false;
+  el.accountRail.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-account-id]");
+    if (!button) return;
+    await selectAccount(button.dataset.accountId);
+  });
+
+  el.alertFeed.addEventListener("click", async (event) => {
+    const decisionButton = event.target.closest("[data-decision]");
+    if (decisionButton) {
+      const alertId = Number(decisionButton.dataset.alertId);
+      const decision = decisionButton.dataset.decision;
+      if (decision === "modify") {
+        const note = window.prompt("Describe the change you want applied to this alert action.");
+        if (note) await applyDecision(alertId, "modify", { note });
+      } else {
+        await applyDecision(alertId, decision);
+      }
+      return;
     }
+
+    const builderButton = event.target.closest("[data-open-builder]");
+    if (builderButton) {
+      const alertId = Number(builderButton.dataset.openBuilder);
+      const alert = state.alerts.find((item) => Number(item.id) === alertId);
+      const draftAction = alert?.recommendation?.actions?.find((item) => item.action_type === "draft_campaign");
+      if (draftAction) {
+        state.draftForm.prompt = alert.summary || draftAction.reason || "";
+        state.draftForm.campaignGoal = draftAction.params?.campaign_goal || state.draftForm.campaignGoal;
+        state.draftForm.targetGeography = draftAction.params?.target_geography || state.draftForm.targetGeography;
+        state.draftForm.monthlyBudget = String(Math.round(Number(draftAction.params?.recommended_monthly_budget || state.draftForm.monthlyBudget || 3000)));
+      }
+      switchPage("campaigns");
+      render();
+      return;
+    }
+
+    const card = event.target.closest("[data-alert-id]");
+    if (!card) return;
+    state.selectedAlertId = Number(card.dataset.alertId);
+    render();
+  });
+
+  el.notificationToggle.addEventListener("click", () => {
+    state.notificationTrayOpen = !state.notificationTrayOpen;
+    if (state.notificationTrayOpen) markNotificationsSeen();
+    renderTopBar();
+    renderNotificationTray();
+  });
+
+  el.closeNotificationTray.addEventListener("click", () => {
+    state.notificationTrayOpen = false;
+    renderTopBar();
+  });
+
+  el.notificationList.addEventListener("click", async (event) => {
+    const card = event.target.closest("[data-notification-id]");
+    if (!card) return;
+    const item = state.notifications.find((notification) => notification.id === card.dataset.notificationId);
+    if (item) await openNotification(item);
+  });
+
+  el.runMonitoringBtn.addEventListener("click", runMonitoring);
+  el.generateWeeklyBtn.addEventListener("click", () => refreshWeeklyReport(true));
+  el.loadWeeklyBtn.addEventListener("click", () => refreshWeeklyReport(false));
+  el.calibrateThresholdsBtn.addEventListener("click", calibrateThresholds);
+  el.refreshDraftsBtn.addEventListener("click", async () => {
+    await Promise.all([loadDraftsForSelectedAccount(state.selectedDraftId), loadNotifications()]);
+    render();
+  });
+  el.buildCampaignBtn.addEventListener("click", buildCampaignDraft);
+  el.campaignFilesInput.addEventListener("change", async () => ingestFiles(el.campaignFilesInput.files));
+  [el.campaignPromptInput, el.campaignGoalInput, el.campaignGeoInput, el.campaignBudgetInput].forEach((input) => {
+    input.addEventListener("input", updateDraftFormFromInputs);
+  });
+  el.campaignFileList.addEventListener("click", (event) => {
+    const removeButton = event.target.closest("[data-file-index]");
+    if (!removeButton) return;
+    state.draftForm.files.splice(Number(removeButton.dataset.fileIndex), 1);
+    renderDraftForm();
+  });
+  el.draftSelector.addEventListener("change", () => {
+    state.selectedDraftId = Number(el.draftSelector.value || 0) || null;
+    state.selectedDraft = state.draftList.find((draft) => Number(draft.id) === Number(state.selectedDraftId)) || null;
+    state.changeRequestOpen = false;
+    state.changeRequestNote = "";
+    if (state.selectedDraft) syncDraftFormFromDraft(state.selectedDraft);
+    syncRoute();
+    render();
+  });
+  el.campaignWorkspace.addEventListener("click", async (event) => {
+    const approveButton = event.target.closest("[data-draft-approve]");
+    if (approveButton) {
+      await approveDraft(Number(approveButton.dataset.draftApprove));
+      return;
+    }
+    const modifyButton = event.target.closest("[data-draft-modify-toggle]");
+    if (modifyButton) {
+      state.changeRequestOpen = true;
+      render();
+      return;
+    }
+    const explainButton = event.target.closest("[data-draft-explain]");
+    if (explainButton) {
+      state.explainDrawerOpen = true;
+      renderExplainDrawer();
+      return;
+    }
+    const cancelButton = event.target.closest("[data-draft-cancel-change]");
+    if (cancelButton) {
+      state.changeRequestOpen = false;
+      state.changeRequestNote = "";
+      render();
+      return;
+    }
+    const submitButton = event.target.closest("[data-draft-submit-change]");
+    if (submitButton) {
+      await submitDraftChange(Number(submitButton.dataset.draftSubmitChange));
+    }
+  });
+  el.closeExplainDrawer.addEventListener("click", () => {
+    state.explainDrawerOpen = false;
+    renderExplainDrawer();
+  });
+
+  window.addEventListener("popstate", async () => {
+    const route = currentRoute();
+    state.currentPage = route.page;
+    if (route.draftId) {
+      try {
+        const payload = await api(`/api/campaigns/draft/${route.draftId}`);
+        state.selectedAccountId = Number(payload.draft.account_id);
+        await Promise.all([loadSelectedAccountDetail(), loadDraftsForSelectedAccount(route.draftId)]);
+      } catch (_error) {
+        await loadDraftsForSelectedAccount();
+      }
+    }
+    render();
   });
 }
 
-// ─── INIT ─────────────────────────────────────────────────────────────────
-
 async function init() {
+  const route = currentRoute();
+  state.currentPage = route.page;
   bindEvents();
-  await Promise.all([loadHealth(), loadDashboard()]);
+  await Promise.all([loadHealth(), loadDashboard({ preferredDraftId: route.draftId }), loadNotifications()]);
+
+  if (route.draftId && (!state.selectedDraft || Number(state.selectedDraft.id) !== Number(route.draftId))) {
+    const payload = await api(`/api/campaigns/draft/${route.draftId}`).catch(() => null);
+    if (payload?.draft) {
+      state.selectedAccountId = Number(payload.draft.account_id);
+      await Promise.all([loadSelectedAccountDetail(), loadDraftsForSelectedAccount(route.draftId)]);
+    }
+  }
+
   if (!state.weeklyReport) await refreshWeeklyReport(true);
+  el.shell.setAttribute("data-page", state.currentPage);
   render();
+  syncRoute(true);
+  window.setInterval(async () => {
+    await loadNotifications();
+    renderTopBar();
+    if (state.notificationTrayOpen) renderNotificationTray();
+  }, 15000);
 }
 
 init().catch((error) => {
   renderErrorCard(el.alertFeed, error.message);
-  renderErrorCard(el.inspectorBody, error.message);
+  renderErrorCard(el.campaignWorkspace, error.message);
   showFlash(error.message, "error");
 });

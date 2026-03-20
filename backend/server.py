@@ -4,6 +4,7 @@ from base64 import b64decode
 from hmac import compare_digest
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from io import BytesIO
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -11,6 +12,8 @@ from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 import json
 import re
+import xml.etree.ElementTree as ET
+import zipfile
 
 from .actions import ActionExecutor
 from .ads_client import GoogleAdsAdapter
@@ -21,22 +24,28 @@ from .orchestrator import Orchestrator, SchedulerThread
 from .reports import ReportService
 from .slack_bridge import SlackBridge
 from .tools import ToolEngine
+from orchestration.models.autonomy_levels import normalize_autonomy_level
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = ROOT_DIR / "frontend"
 
 DEFAULT_AUTONOMY_POLICY = {
-    "default": "propose_wait",
+    "default": "propose_and_wait",
     "action_levels": {
-        "add_negative_keywords": "propose_wait",
-        "pause_campaign": "propose_wait",
-        "adjust_bid": "propose_wait",
-        "draft_campaign": "draft_review",
+        "add_negative_keywords": "propose_and_wait",
+        "pause_campaign": "propose_and_wait",
+        "adjust_bid": "propose_and_wait",
+        "draft_campaign": "draft_and_review",
     },
     "escalation": {"spend_anomaly_pct": 50, "roas_drop_pct": 45},
 }
-ALLOWED_AUTONOMY_LEVELS = {"propose_wait", "draft_review", "escalate"}
+ALLOWED_AUTONOMY_LEVELS = {"propose_and_wait", "draft_and_review", "escalate"}
+SUPPORTED_CONTEXT_EXTENSIONS = {".txt", ".md", ".csv", ".json", ".yaml", ".yml", ".xml", ".html", ".htm", ".docx"}
+MAX_CONTEXT_FILES = 6
+MAX_CONTEXT_FILE_BYTES = 1_500_000
+MAX_CONTEXT_TEXT_CHARS = 16_000
+MAX_TOTAL_CONTEXT_CHARS = 48_000
 
 
 def _coerce_float(value: Any, default: float, *, minimum: float, maximum: float) -> float:
@@ -52,14 +61,17 @@ def _sanitize_autonomy(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return policy
 
-    candidate_default = str(raw.get("default", policy["default"])).strip().lower()
+    candidate_default = normalize_autonomy_level(raw.get("default", policy["default"]), default=policy["default"])
     if candidate_default in ALLOWED_AUTONOMY_LEVELS:
         policy["default"] = candidate_default
 
     candidate_levels = raw.get("action_levels", {})
     if isinstance(candidate_levels, dict):
         for action_type in policy["action_levels"]:
-            candidate = str(candidate_levels.get(action_type, policy["action_levels"][action_type])).strip().lower()
+            candidate = normalize_autonomy_level(
+                candidate_levels.get(action_type, policy["action_levels"][action_type]),
+                default=policy["action_levels"][action_type],
+            )
             if candidate in ALLOWED_AUTONOMY_LEVELS:
                 policy["action_levels"][action_type] = candidate
 
@@ -78,6 +90,103 @@ def _sanitize_autonomy(raw: Any) -> dict[str, Any]:
             maximum=200.0,
         )
     return policy
+
+
+def _parse_quiet_hour(value: Any) -> int | None:
+    if value in {None, ""}:
+        return None
+    try:
+        hour = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Quiet hours must be integers between 0 and 23") from exc
+    if hour < 0 or hour > 23:
+        raise ValueError("Quiet hours must be integers between 0 and 23")
+    return hour
+
+
+def _coerce_monthly_budget(value: Any, default: float = 3000.0) -> float:
+    try:
+        budget = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(500.0, min(250000.0, budget))
+
+
+def _decode_text_bytes(raw: bytes) -> str:
+    for encoding in ("utf-8", "utf-16", "latin-1"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="ignore")
+
+
+def _extract_docx_text(raw: bytes) -> str:
+    try:
+        with zipfile.ZipFile(BytesIO(raw)) as archive:
+            document_xml = archive.read("word/document.xml")
+    except Exception as exc:
+        raise ValueError("Unable to read DOCX file") from exc
+    root = ET.fromstring(document_xml)
+    namespace = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+    parts = [node.text.strip() for node in root.findall(".//w:t", namespace) if node.text and node.text.strip()]
+    return "\n".join(parts)
+
+
+def _extract_uploaded_text(filename: str, content_type: str, raw: bytes) -> str:
+    suffix = Path(filename).suffix.lower()
+    if suffix == ".docx":
+        return _extract_docx_text(raw)
+    if (
+        suffix in SUPPORTED_CONTEXT_EXTENSIONS
+        or str(content_type).startswith("text/")
+        or content_type in {"application/json", "application/xml"}
+    ):
+        return _decode_text_bytes(raw)
+    raise ValueError("Unsupported file type. Supported uploads: txt, md, csv, json, html, xml, yaml, docx.")
+
+
+def _normalize_uploaded_files(raw_files: Any) -> list[dict[str, Any]]:
+    if raw_files is None or raw_files == "":
+        return []
+    if not isinstance(raw_files, list):
+        raise ValueError("files must be an array")
+    if len(raw_files) > MAX_CONTEXT_FILES:
+        raise ValueError(f"Upload up to {MAX_CONTEXT_FILES} files per campaign draft")
+
+    normalized: list[dict[str, Any]] = []
+    total_chars = 0
+    for index, item in enumerate(raw_files, start=1):
+        if not isinstance(item, dict):
+            raise ValueError("Each file entry must be an object")
+        filename = Path(str(item.get("name") or f"context-{index}.txt")).name[:120]
+        content_type = str(item.get("type") or "")
+        content_b64 = str(item.get("content_base64") or "")
+        if not content_b64:
+            raise ValueError(f"{filename} is missing content")
+        try:
+            raw = b64decode(content_b64.encode("utf-8"))
+        except Exception as exc:
+            raise ValueError(f"{filename} could not be decoded") from exc
+        if len(raw) > MAX_CONTEXT_FILE_BYTES:
+            raise ValueError(f"{filename} exceeds the {MAX_CONTEXT_FILE_BYTES // 1_000_000}MB file limit")
+        text = re.sub(r"\n{3,}", "\n\n", _extract_uploaded_text(filename, content_type, raw)).strip()
+        if not text:
+            raise ValueError(f"{filename} did not contain readable text")
+        trimmed = text[:MAX_CONTEXT_TEXT_CHARS]
+        total_chars += len(trimmed)
+        if total_chars > MAX_TOTAL_CONTEXT_CHARS:
+            raise ValueError("Uploaded context exceeds the combined text limit")
+        normalized.append(
+            {
+                "filename": filename,
+                "content_type": content_type or "application/octet-stream",
+                "size_bytes": len(raw),
+                "content_text": trimmed,
+                "excerpt": trimmed[:240],
+            }
+        )
+    return normalized
 
 
 class AppContext:
@@ -299,6 +408,219 @@ class RequestHandler(BaseHTTPRequestHandler):
             "top_categories": sorted(by_category.items(), key=lambda item: item[1], reverse=True)[:8],
         }
 
+    def _serialize_campaign_draft(self, row: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not row:
+            return None
+        files = self.context.db.list_campaign_draft_files(int(row["id"]))
+        return {
+            "id": row["id"],
+            "account_id": row["account_id"],
+            "status": row["status"],
+            "prompt_text": row["prompt_text"],
+            "campaign_goal": row["campaign_goal"],
+            "target_geography": row["target_geography"],
+            "monthly_budget": row["monthly_budget"],
+            "context_summary": row["context_summary"],
+            "review_note": row.get("review_note"),
+            "draft": json.loads(row.get("draft_json", "{}")),
+            "files": [
+                {
+                    "id": item["id"],
+                    "filename": item["filename"],
+                    "content_type": item["content_type"],
+                    "size_bytes": item["size_bytes"],
+                    "created_at": item["created_at"],
+                    "excerpt": str(item.get("content_text", ""))[:240],
+                    "char_count": len(str(item.get("content_text", ""))),
+                }
+                for item in files
+            ],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "approved_at": row.get("approved_at"),
+        }
+
+    def _build_draft_context_summary(
+        self,
+        account_id: int,
+        prompt_text: str,
+        files: list[dict[str, Any]],
+        review_note: str = "",
+    ) -> tuple[str, list[dict[str, Any]]]:
+        memory_rows = self.context.db.list_context_memory(account_id)[:4]
+        memory_briefs = [
+            {
+                "memory_key": row["memory_key"],
+                "memory_value": str(row["memory_value"])[:180],
+            }
+            for row in memory_rows
+        ]
+        segments: list[str] = []
+        if prompt_text:
+            segments.append(f"Operator brief: {prompt_text[:280]}")
+        if review_note:
+            segments.append(f"Revision request: {review_note[:220]}")
+        if files:
+            file_labels = ", ".join(item["filename"] for item in files[:4])
+            segments.append(f"Uploaded references: {file_labels}")
+        if memory_briefs:
+            segments.append(
+                "Account context: "
+                + " | ".join(f"{item['memory_key']}: {item['memory_value']}" for item in memory_briefs[:3])
+            )
+        return " ".join(segments).strip(), memory_briefs
+
+    def _generate_campaign_draft(
+        self,
+        *,
+        account_id: int,
+        prompt_text: str,
+        campaign_goal: str,
+        target_geography: str,
+        monthly_budget: float,
+        files: list[dict[str, Any]],
+        review_note: str = "",
+        existing_draft_id: int | None = None,
+    ) -> dict[str, Any]:
+        account = self.context.db.get_account(account_id)
+        if not account:
+            raise ValueError("Unknown account")
+
+        context_summary, memory_briefs = self._build_draft_context_summary(account_id, prompt_text, files, review_note)
+        context_files = [
+            {
+                "filename": item["filename"],
+                "excerpt": item["excerpt"],
+                "char_count": len(item["content_text"]),
+            }
+            for item in files
+        ]
+        draft = self.context.tools.run_tool(
+            "draft_campaign",
+            account_id=account_id,
+            params={
+                "monthly_budget": monthly_budget,
+                "campaign_goal": campaign_goal,
+                "target_geography": target_geography,
+                "prompt_text": prompt_text,
+                "context_files": context_files,
+            },
+        )
+        draft["context_summary"] = context_summary
+        draft["source_context"] = {
+            "prompt_text": prompt_text,
+            "review_note": review_note,
+            "files": context_files,
+            "memory": memory_briefs,
+        }
+        draft["structure_explanation"] = {
+            "title": "Why this draft is structured in STAG format",
+            "bullets": [
+                "Ad groups are separated by tight intent clusters to keep search terms and ad copy aligned.",
+                "Shared negatives are carried across the build so expansion does not reintroduce known waste.",
+                "Budget, CPA targets, and geo settings are inherited from the selected account and current benchmark posture.",
+            ],
+            "operator_prompt_used": bool(prompt_text),
+        }
+        draft["status_message"] = "Nothing executes until you approve"
+
+        if existing_draft_id is None:
+            stored = self.context.db.create_campaign_draft(
+                account_id=account_id,
+                prompt_text=prompt_text,
+                campaign_goal=campaign_goal,
+                target_geography=target_geography,
+                monthly_budget=monthly_budget,
+                context_summary=context_summary,
+                draft=draft,
+                files=files,
+            )
+            category = "campaign_draft_created"
+            message = f"Campaign draft created for {account['name']}"
+        else:
+            stored = self.context.db.update_campaign_draft(
+                existing_draft_id,
+                prompt_text=prompt_text,
+                campaign_goal=campaign_goal,
+                target_geography=target_geography,
+                monthly_budget=monthly_budget,
+                context_summary=context_summary,
+                review_note=review_note or None,
+                draft=draft,
+                files=files,
+                status="draft",
+            )
+            category = "campaign_draft_updated"
+            message = f"Campaign draft updated for {account['name']}"
+
+        self.context.monitor.emit(
+            "info",
+            category,
+            message,
+            account_id=account_id,
+            request_id=self.request_id,
+            details={
+                "draft_id": stored["id"] if stored else None,
+                "campaign_goal": campaign_goal,
+                "target_geography": target_geography,
+                "file_count": len(files),
+            },
+        )
+        return self._serialize_campaign_draft(stored) or {}
+
+    def _notification_items(self, limit: int = 20) -> list[dict[str, Any]]:
+        alerts = self.context.db.list_alerts(limit=max(8, limit))
+        drafts = []
+        for account in self.context.db.list_accounts():
+            latest = self.context.db.latest_campaign_draft(int(account["id"]))
+            if latest:
+                drafts.append(latest)
+        events = self.context.db.list_runtime_events(limit=max(12, limit))
+
+        items: list[dict[str, Any]] = []
+        for event in events:
+            details = json.loads(event.get("details_json", "{}"))
+            items.append(
+                {
+                    "id": f"event-{event['id']}",
+                    "kind": "system",
+                    "severity": event["level"],
+                    "title": event["message"],
+                    "body": details.get("path") or details.get("campaign_goal") or event["category"],
+                    "account_id": event.get("account_id"),
+                    "created_at": event["created_at"],
+                }
+            )
+        for alert in alerts[:limit]:
+            items.append(
+                {
+                    "id": f"alert-{alert['id']}",
+                    "kind": "alert",
+                    "severity": alert["severity"],
+                    "title": alert["title"],
+                    "body": alert["summary"],
+                    "account_id": alert["account_id"],
+                    "alert_id": alert["id"],
+                    "created_at": alert["created_at"],
+                }
+            )
+        for draft in drafts:
+            parsed = json.loads(draft.get("draft_json", "{}"))
+            items.append(
+                {
+                    "id": f"draft-{draft['id']}",
+                    "kind": "draft",
+                    "severity": "info",
+                    "title": parsed.get("campaign_name") or "Campaign draft ready",
+                    "body": draft.get("context_summary") or parsed.get("campaign_goal") or "Review pending",
+                    "account_id": draft["account_id"],
+                    "draft_id": draft["id"],
+                    "created_at": draft["updated_at"],
+                }
+            )
+        items.sort(key=lambda item: str(item.get("created_at", "")), reverse=True)
+        return items[:limit]
+
     def _handle_slack_interactivity(self, raw_body: bytes) -> None:
         headers = {str(k).lower(): v for k, v in self.headers.items()}
         if not self.context.slack.verify_signature(headers, raw_body):
@@ -488,6 +810,14 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, {"ok": True, "events": events, "request_id": self.request_id})
             return
 
+        if path == "/api/notifications":
+            limit = max(1, min(50, int(query.get("limit", ["20"])[0] or 20)))
+            self._send_json(
+                HTTPStatus.OK,
+                {"ok": True, "notifications": self._notification_items(limit=limit), "request_id": self.request_id},
+            )
+            return
+
         if path == "/api/tools/run-calibration":
             vertical = query.get("vertical", [None])[0]
             result = self.context.tools.calibrate_thresholds(vertical=vertical, apply=False)
@@ -528,10 +858,32 @@ class RequestHandler(BaseHTTPRequestHandler):
             )
             return
 
+        m = re.fullmatch(r"/api/accounts/(\d+)/metrics", path)
+        if m:
+            aid = int(m.group(1))
+            account = self.context.db.get_account(aid)
+            if not account:
+                self._not_found()
+                return
+            health = self.context.tools.health_check(aid, {})
+            waste = self.context.tools.analyze_budget_waste(aid, {})
+            self._send_json(
+                HTTPStatus.OK,
+                {"ok": True, "metrics": health.get("metrics", {}), "health": health, "waste": waste, "request_id": self.request_id},
+            )
+            return
+
         m = re.fullmatch(r"/api/accounts/(\d+)/campaigns", path)
         if m:
             aid = int(m.group(1))
             self._send_json(HTTPStatus.OK, {"ok": True, "campaigns": self.context.db.campaigns_for_account(aid), "request_id": self.request_id})
+            return
+
+        m = re.fullmatch(r"/api/accounts/(\d+)/campaign-drafts", path)
+        if m:
+            aid = int(m.group(1))
+            drafts = [self._serialize_campaign_draft(item) for item in self.context.db.list_campaign_drafts(aid, limit=25)]
+            self._send_json(HTTPStatus.OK, {"ok": True, "drafts": [item for item in drafts if item], "request_id": self.request_id})
             return
 
         m = re.fullmatch(r"/api/accounts/(\d+)/negatives", path)
@@ -582,7 +934,26 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, {"ok": True, "context_memory": memories, "request_id": self.request_id})
             return
 
-        if path in {"/", "/index.html"}:
+        if path == "/api/campaigns/draft/latest":
+            account_id = int(query.get("account_id", ["0"])[0] or 0)
+            if account_id <= 0:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "account_id is required", "request_id": self.request_id})
+                return
+            draft = self._serialize_campaign_draft(self.context.db.latest_campaign_draft(account_id))
+            self._send_json(HTTPStatus.OK, {"ok": True, "draft": draft, "request_id": self.request_id})
+            return
+
+        m = re.fullmatch(r"/api/campaigns/draft/(\d+)", path)
+        if m:
+            draft_id = int(m.group(1))
+            draft = self._serialize_campaign_draft(self.context.db.get_campaign_draft(draft_id))
+            if not draft:
+                self._not_found()
+                return
+            self._send_json(HTTPStatus.OK, {"ok": True, "draft": draft, "request_id": self.request_id})
+            return
+
+        if path in {"/", "/index.html", "/alerts", "/campaigns/draft"} or re.fullmatch(r"/campaigns/draft/\d+", path):
             self._serve_frontend_file("index.html", "text/html; charset=utf-8")
             return
         if path == "/app.js":
@@ -613,6 +984,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                     autonomy_json=json.dumps(autonomy),
                     data_source="demo",
                     google_ads_customer_name=body.get("google_ads_customer_name"),
+                    quiet_hours_start=_parse_quiet_hour(body.get("quiet_hours_start")),
+                    quiet_hours_end=_parse_quiet_hour(body.get("quiet_hours_end")),
                 )
                 self._send_json(HTTPStatus.CREATED, {"ok": True, "account": account, "request_id": self.request_id})
             except Exception as exc:
@@ -638,8 +1011,121 @@ class RequestHandler(BaseHTTPRequestHandler):
                     autonomy_json=json.dumps(autonomy),
                     data_source="live",
                     google_ads_customer_name=str(summary.get("descriptive_name", "")),
+                    quiet_hours_start=_parse_quiet_hour(body.get("quiet_hours_start")),
+                    quiet_hours_end=_parse_quiet_hour(body.get("quiet_hours_end")),
                 )
                 self._send_json(HTTPStatus.CREATED, {"ok": True, "account": account, "google_ads_customer": summary, "request_id": self.request_id})
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc), "request_id": self.request_id})
+            return
+
+        if path == "/api/campaigns/draft":
+            try:
+                body = self._read_json_body()
+                account_id = int(body["account_id"])
+                account = self.context.db.get_account(account_id)
+                if not account:
+                    raise ValueError("Unknown account")
+                prompt_text = str(body.get("prompt", "")).strip()
+                campaign_goal = str(body.get("campaign_goal") or "Lead generation").strip() or "Lead generation"
+                target_geography = str(body.get("target_geography") or f"{account['name']} +25mi").strip() or f"{account['name']} +25mi"
+                monthly_budget = _coerce_monthly_budget(
+                    body.get("monthly_budget"),
+                    default=max(2500.0, round(float(self.context.tools.health_check(account_id, {}).get("metrics", {}).get("spend_7d", 0) or 0) * 4.2, 2)),
+                )
+                files = _normalize_uploaded_files(body.get("files", []))
+                draft = self._generate_campaign_draft(
+                    account_id=account_id,
+                    prompt_text=prompt_text,
+                    campaign_goal=campaign_goal,
+                    target_geography=target_geography,
+                    monthly_budget=monthly_budget,
+                    files=files,
+                )
+                self._send_json(HTTPStatus.CREATED, {"ok": True, "draft": draft, "request_id": self.request_id})
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc), "request_id": self.request_id})
+            return
+
+        m = re.fullmatch(r"/api/campaigns/draft/(\d+)/approve", path)
+        if m:
+            draft_id = int(m.group(1))
+            try:
+                body = self._read_json_body()
+                actor = str(body.get("actor", "dashboard_user"))
+                draft_row = self.context.db.get_campaign_draft(draft_id)
+                if not draft_row:
+                    self._not_found()
+                    return
+                updated = self.context.db.mark_campaign_draft_status(draft_id, "approved")
+                execution_arn = f"arn:aws:states:local:000000000000:execution:ads-genie:campaign-draft-{draft_id}-{uuid4().hex[:10]}"
+                self.context.db.insert_decision(
+                    account_id=int(draft_row["account_id"]),
+                    actor=actor,
+                    action="approve_campaign_draft",
+                    payload={"draft_id": draft_id, "execution_arn": execution_arn},
+                )
+                self.context.monitor.emit(
+                    "info",
+                    "campaign_draft_approved",
+                    f"Campaign draft approved for account {draft_row['account_id']}",
+                    account_id=int(draft_row["account_id"]),
+                    request_id=self.request_id,
+                    details={"draft_id": draft_id, "execution_arn": execution_arn},
+                )
+                self._send_json(
+                    HTTPStatus.OK,
+                    {
+                        "ok": True,
+                        "execution_arn": execution_arn,
+                        "draft": self._serialize_campaign_draft(updated),
+                        "request_id": self.request_id,
+                    },
+                )
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc), "request_id": self.request_id})
+            return
+
+        m = re.fullmatch(r"/api/campaigns/draft/(\d+)/modify", path)
+        if m:
+            draft_id = int(m.group(1))
+            try:
+                body = self._read_json_body()
+                draft_row = self.context.db.get_campaign_draft(draft_id)
+                if not draft_row:
+                    self._not_found()
+                    return
+                review_note = str(body.get("note", "")).strip()
+                if not review_note:
+                    raise ValueError("A revision note is required")
+                existing_files = self.context.db.list_campaign_draft_files(draft_id)
+                files = _normalize_uploaded_files(body["files"]) if "files" in body else [
+                    {
+                        "filename": str(item["filename"]),
+                        "content_type": str(item.get("content_type", "")),
+                        "size_bytes": int(item.get("size_bytes", 0)),
+                        "content_text": str(item.get("content_text", "")),
+                        "excerpt": str(item.get("content_text", ""))[:240],
+                    }
+                    for item in existing_files
+                ]
+                updated = self._generate_campaign_draft(
+                    account_id=int(draft_row["account_id"]),
+                    prompt_text=str(body.get("prompt") or draft_row.get("prompt_text") or "").strip(),
+                    campaign_goal=str(body.get("campaign_goal") or draft_row.get("campaign_goal") or "Lead generation").strip() or "Lead generation",
+                    target_geography=str(body.get("target_geography") or draft_row.get("target_geography") or "Local radius +25mi").strip() or "Local radius +25mi",
+                    monthly_budget=_coerce_monthly_budget(body.get("monthly_budget"), default=float(draft_row.get("monthly_budget") or 3000.0)),
+                    files=files,
+                    review_note=review_note,
+                    existing_draft_id=draft_id,
+                )
+                self.context.db.insert_decision(
+                    account_id=int(draft_row["account_id"]),
+                    actor=str(body.get("actor", "dashboard_user")),
+                    action="modify_campaign_draft",
+                    payload={"draft_id": draft_id, "note": review_note},
+                )
+                self._send_json(HTTPStatus.OK, {"ok": True, "draft": updated, "request_id": self.request_id})
             except Exception as exc:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc), "request_id": self.request_id})
             return

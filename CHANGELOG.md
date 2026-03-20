@@ -8,22 +8,29 @@ This project is not formally versioned yet, so milestone-style version labels ar
 ## [Unreleased]
 
 ### Added
-- Added this `CHANGELOG.md` file to document the repository history from inception in a Keep a Changelog-style format.
-- Added a documentation-maintenance rule to the handoff/task-memory flow so future work updates the changelog, handoff, and next-task note together.
-- Added a consolidated implementation-history summary to the AI handoff document so another agent can continue without replaying the full thread.
-- Added `docs/README.md` as a documentation index so planning material, extracts, and project-memory files are grouped under a standard docs folder.
-- Added `data/.gitkeep` so the generated local-data directory remains in the repository without forcing a tracked SQLite database snapshot.
+- Added shared autonomy-level normalization in `orchestration/models/autonomy_levels.py` so legacy aliases such as `propose_wait` and `draft_review` are normalized consistently across the local app and MCP-style write paths.
+- Added quiet-hours persistence and enforcement in the local account/orchestrator flow.
+- Added local rollback support for supported executed actions, including rollback metadata tracking and rollback-result state transitions.
+- Added campaign-draft persistence and APIs in the local backend for create, fetch, approve, and modify flows.
+- Added campaign-builder prompt/context intake plus file-context upload handling in the frontend/local backend flow.
+- Added `/api/notifications` and a top-right notification tray in the local frontend.
+- Added tests covering autonomy alias normalization, quiet-hours deferral, rollback behavior, and campaign-draft/notification flows.
 
 ### Changed
-- Reorganized root-level repository clutter into `docs/` and `scripts/` to make the GitHub file tree look more like a conventional project repository.
-- Moved handoff/task-memory files from the repo root into `docs/project/`.
-- Moved planning PDFs and extracted planning/reference text into `docs/planning/` and `docs/reference/`.
-- Moved Google Ads OAuth helper scripts into `scripts/google_ads/`.
-- Rewrote the root `README.md` into a shorter GitHub-facing overview with links to deeper documentation.
-- Updated the handoff documentation to reflect the current reality of the codebase: a working local app plus a partially implemented production scaffold.
-- Updated task memory to include an explicit end-of-task note describing what to work on next.
-- Validated the repository cleanup with the existing test suite (`25 passed`).
-- Changed the local SQLite database from a tracked repository artifact into generated local state that should not be committed.
+- Tightened the local control-plane security posture with stricter auth/CORS behavior, safer frontend rendering, stricter MCP route access, improved runtime-event redaction, Slack replay protection, and pinned dependency versions.
+- Updated the local UI/backend contract so more backend functionality is reachable from the browser, especially campaign-draft and notification flows.
+- Expanded the SQLite-backed account model to persist quiet hours and normalized autonomy payloads.
+- Updated handoff/task-memory/docs index files to reflect the latest security, autonomy, rollback, campaign-draft, and notification work.
+
+### Fixed
+- Fixed `enable_ad_group` autonomy-policy enforcement so it checks the correct action type.
+- Fixed autonomy handling so legacy stored policy names are normalized to the current canonical levels.
+- Fixed local orchestrator behavior so quiet hours defer auto-execute decisions into proposal/review behavior instead of executing immediately.
+- Fixed local decision handling to allow rollback as an explicit alert decision path for supported actions.
+
+### Security
+- Hardened the main local app and MCP path against the first major round of auth, CORS, XSS, error-leakage, and replay issues.
+- Documented the latest remaining security follow-ups after the newer UI/backend pass: object-level authorization and bounded request-body parsing still need a focused completion pass.
 
 ## [0.3.0] - 2026-03-17
 

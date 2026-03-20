@@ -36,16 +36,13 @@ except ImportError:  # pragma: no cover - fallback for bare environments
 from mcp_server.auth.google_oauth import GoogleAdsAuth, SecretConfigurationError
 from mcp_server.cache.dynamodb_cache import DynamoDBCache
 from mcp_server.gaql.queries import QueryExecutor
-from mcp_server.tools.ad_copy_performance import ad_copy_performance
 from mcp_server.tools.analyze_budget_waste import analyze_budget_waste
 from mcp_server.tools.benchmark_account import benchmark_account
-from mcp_server.tools.competitor_analysis import competitor_analysis
 from mcp_server.tools.cross_mcc_anomalies import cross_mcc_anomalies
 from mcp_server.tools.diagnose_roas_drop import diagnose_roas_drop
 from mcp_server.tools.draft_campaign import draft_campaign
 from mcp_server.tools.generate_negative_keywords import generate_negative_keywords
 from mcp_server.tools.health_check import health_check
-from mcp_server.tools.keyword_expansion import keyword_expansion
 from mcp_server.tools.search_terms_audit import search_terms_audit
 
 
@@ -189,9 +186,6 @@ def create_app() -> FastAPI:
         "generate_negative_keywords": generate_negative_keywords,
         "cross_mcc_anomalies": cross_mcc_anomalies,
         "draft_campaign": draft_campaign,
-        "competitor_analysis": competitor_analysis,
-        "keyword_expansion": keyword_expansion,
-        "ad_copy_performance": ad_copy_performance,
     }
 
     @app.post("/tools/{tool_name}")
