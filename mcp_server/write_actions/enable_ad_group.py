@@ -37,7 +37,7 @@ def enable_ad_group(
     inputs = {"customer_id": customer_id, "ad_group_id": ad_group_id, "target_status": "ENABLED"}
     _account, policy, _registry, _autonomy = resolve_policy(
         customer_id=customer_id,
-        action_type="pause_ad_group",
+        action_type="enable_ad_group",
         minimum_level="propose_and_wait",
         registry=registry,
         autonomy=autonomy,

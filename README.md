@@ -65,6 +65,8 @@ GOOGLE_ADS_CLIENT_ID=
 GOOGLE_ADS_CLIENT_SECRET=
 GOOGLE_ADS_REFRESH_TOKEN=
 GOOGLE_ADS_MCC_CUSTOMER_ID=
+APP_AUTH_USERNAME=admin
+APP_AUTH_PASSWORD=<set-a-strong-password>
 ```
 
 Then restart the app and use:
@@ -106,8 +108,11 @@ Planning/reference material:
 ## Runtime Notes
 
 - The local app defaults to demo mode when Google Ads credentials are not configured.
+- API CORS is origin-restricted using `APP_ALLOWED_ORIGINS` (defaults to localhost origins).
+- Auth is automatically required when live Google Ads credentials are present or when binding beyond loopback.
 - The local SQLite database is generated at runtime and is no longer intended to be tracked in Git.
 - The production-oriented AWS/MCP path exists in code but is not the same thing as the local runnable app.
+- MCP server routes (`/tools/*`, `/health`) require bearer token auth when `MCP_AUTH_ENABLED=true` (default). Set `MCP_AUTH_TOKEN`.
 - Vercel is not the natural deployment target for the current local runtime because it depends on a long-lived server process, local SQLite, and an in-process scheduler.
 
 ## Next Recommended Work

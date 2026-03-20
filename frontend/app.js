@@ -40,6 +40,37 @@ const el = {
   navTabs: document.querySelectorAll(".nav-tab"),
 };
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function sanitizePayload(value) {
+  if (typeof value === "string") return escapeHtml(value);
+  if (Array.isArray(value)) return value.map((item) => sanitizePayload(item));
+  if (value && typeof value === "object") {
+    const clean = {};
+    Object.entries(value).forEach(([key, item]) => {
+      clean[key] = sanitizePayload(item);
+    });
+    return clean;
+  }
+  return value;
+}
+
+function renderErrorCard(target, message) {
+  if (!target) return;
+  target.innerHTML = "";
+  const node = document.createElement("div");
+  node.className = "empty-card";
+  node.textContent = String(message || "Unexpected error");
+  target.appendChild(node);
+}
+
 // ─── API ───────────────────────────────────────────────────────────────
 
 async function api(path, options = {}) {
@@ -47,7 +78,7 @@ async function api(path, options = {}) {
     headers: { "Content-Type": "application/json" },
     ...options,
   });
-  const payload = await response.json();
+  const payload = sanitizePayload(await response.json());
   if (!response.ok || payload.ok === false) {
     throw new Error(payload.error || `Request failed: ${response.status}`);
   }
@@ -466,10 +497,10 @@ function inlineModify(alertId, cardEl) {
       await loadDashboard();
       render();
     } catch (err) {
-      form.insertAdjacentHTML(
-        "beforeend",
-        `<p style="color:var(--danger);font-size:0.8rem;margin:4px 0 0">${err.message}</p>`
-      );
+      const errorNode = document.createElement("p");
+      errorNode.style.cssText = "color:var(--danger);font-size:0.8rem;margin:4px 0 0";
+      errorNode.textContent = err.message;
+      form.appendChild(errorNode);
       form.querySelector(`#modifySend-${alertId}`).disabled = false;
       form.querySelector(`#modifyCancel-${alertId}`).disabled = false;
     }
@@ -481,6 +512,14 @@ function inlineModify(alertId, cardEl) {
 function renderWeeklyReport() {
   const runtime = state.health?.runtime || {};
   const categories = (runtime.top_categories || []).slice(0, 3).map(([name, count]) => `${name} (${count})`).join(" · ");
+  const authConfigured = Boolean(state.health?.auth_configured);
+  const authRequired = Boolean(state.health?.auth_required);
+  const authLabel = authConfigured ? "Enabled" : authRequired ? "Required" : "Optional (local)";
+  const authHint = authConfigured
+    ? "Dashboard/API auth is active."
+    : authRequired
+    ? "Set APP_AUTH_USERNAME and APP_AUTH_PASSWORD before using mutating endpoints."
+    : "Enable APP_AUTH_ENABLED and set APP_AUTH_PASSWORD to lock local dashboard/API.";
   el.systemStatus.innerHTML = `
     <div class="system-card">
       <h4>Google Ads</h4>
@@ -494,8 +533,8 @@ function renderWeeklyReport() {
     </div>
     <div class="system-card">
       <h4>Auth</h4>
-      <strong>${state.health?.auth_configured ? "Enabled" : "Open locally"}</strong>
-      <p>Turn on dashboard/API auth with APP_AUTH_ENABLED and APP_AUTH_PASSWORD.</p>
+      <strong>${authLabel}</strong>
+      <p>${authHint}</p>
     </div>
     <div class="system-card">
       <h4>Runtime</h4>
@@ -939,7 +978,7 @@ async function init() {
 }
 
 init().catch((error) => {
-  el.alertFeed.innerHTML = `<div class="empty-card">${error.message}</div>`;
-  el.inspectorBody.innerHTML = `<div class="empty-card">${error.message}</div>`;
+  renderErrorCard(el.alertFeed, error.message);
+  renderErrorCard(el.inspectorBody, error.message);
   showFlash(error.message, "error");
 });

@@ -5,6 +5,7 @@ from urllib.parse import urlencode
 import hashlib
 import hmac
 import json
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -19,6 +20,8 @@ class SlackBridge:
         self.settings = settings
         self.db = db
         self.monitor = monitor
+        self._seen_signatures: dict[str, float] = {}
+        self._seen_lock = threading.RLock()
 
     def _api_call(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.settings.slack_bot_token:
@@ -147,7 +150,21 @@ class SlackBridge:
             basestring,
             hashlib.sha256,
         ).hexdigest()
-        return hmac.compare_digest(expected, signature)
+        if not hmac.compare_digest(expected, signature):
+            return False
+
+        # Prevent replay within the accepted timestamp window.
+        fingerprint = hashlib.sha256(f"{signature}:{timestamp}:".encode("utf-8") + raw_body).hexdigest()
+        now = time.time()
+        with self._seen_lock:
+            cutoff = now - 60 * 5
+            stale = [key for key, seen_at in self._seen_signatures.items() if seen_at < cutoff]
+            for key in stale:
+                self._seen_signatures.pop(key, None)
+            if fingerprint in self._seen_signatures:
+                return False
+            self._seen_signatures[fingerprint] = now
+        return True
 
     def open_modify_modal(self, trigger_id: str, alert_id: int, existing_value: str = "") -> dict[str, Any]:
         view = {
@@ -204,4 +221,3 @@ class SlackBridge:
                 ],
             },
         ]
-

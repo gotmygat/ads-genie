@@ -22,6 +22,7 @@ class AdsGenieSystemTest(unittest.TestCase):
         self.settings = Settings(
             app_host="127.0.0.1",
             app_port=0,
+            app_allowed_origins=("http://127.0.0.1:8080",),
             db_path=db_path,
             timezone="America/Toronto",
             environment="test",

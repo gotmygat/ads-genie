@@ -27,6 +27,7 @@ def load_env_file(path: Path = DEFAULT_ENV_PATH) -> None:
 class Settings:
     app_host: str
     app_port: int
+    app_allowed_origins: tuple[str, ...]
     db_path: str
     timezone: str
     environment: str
@@ -65,7 +66,17 @@ class Settings:
 
     @property
     def auth_is_configured(self) -> bool:
-        return self.app_auth_enabled and bool(self.app_auth_username and _is_real_secret(self.app_auth_password))
+        return bool(self.app_auth_username and _is_real_secret(self.app_auth_password))
+
+    @property
+    def host_is_loopback(self) -> bool:
+        host = (self.app_host or "").strip().lower()
+        return host in {"127.0.0.1", "localhost", "::1"}
+
+    @property
+    def auth_is_required(self) -> bool:
+        # Force auth when live credentials are present or server is reachable beyond loopback.
+        return self.app_auth_enabled or self.has_google_ads_credentials or not self.host_is_loopback
 
 
 
@@ -84,12 +95,40 @@ def _is_real_secret(value: str) -> bool:
     return True
 
 
+def _parse_origins(value: str) -> tuple[str, ...]:
+    if not value:
+        return tuple()
+    origins: list[str] = []
+    for raw in value.split(","):
+        candidate = raw.strip()
+        if candidate and candidate not in origins:
+            origins.append(candidate)
+    return tuple(origins)
+
+
+def _default_allowed_origins(host: str, port: int) -> tuple[str, ...]:
+    origins = {
+        f"http://127.0.0.1:{port}",
+        f"http://localhost:{port}",
+    }
+    normalized = (host or "").strip().lower()
+    if normalized and normalized not in {"127.0.0.1", "localhost", "0.0.0.0", "::", "::1"}:
+        origins.add(f"http://{host}:{port}")
+    return tuple(sorted(origins))
+
+
 def load_settings() -> Settings:
     load_env_file()
     base_dir = Path(__file__).resolve().parent.parent
+    app_host = os.getenv("APP_HOST", "127.0.0.1")
+    app_port = int(os.getenv("APP_PORT", "8080"))
+    app_allowed_origins = _parse_origins(os.getenv("APP_ALLOWED_ORIGINS", ""))
+    if not app_allowed_origins:
+        app_allowed_origins = _default_allowed_origins(app_host, app_port)
     return Settings(
-        app_host=os.getenv("APP_HOST", "127.0.0.1"),
-        app_port=int(os.getenv("APP_PORT", "8080")),
+        app_host=app_host,
+        app_port=app_port,
+        app_allowed_origins=app_allowed_origins,
         db_path=os.getenv("DB_PATH", str(base_dir / "data" / "ads_genie.db")),
         timezone=os.getenv("APP_TIMEZONE", "America/Toronto"),
         environment=os.getenv("APP_ENV", "local"),

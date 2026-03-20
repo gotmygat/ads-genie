@@ -34,6 +34,7 @@ https://developers.google.com/identity/protocols/oauth2/web-server#python
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import socket
@@ -49,6 +50,15 @@ _SCOPE = "https://www.googleapis.com/auth/adwords"
 _SERVER = "127.0.0.1"
 _PORT = 8090
 _REDIRECT_URI = f"http://{_SERVER}:{_PORT}"
+
+
+def persist_refresh_token(refresh_token: str, output_path: str = "user_credentials.json") -> str:
+    """Writes refresh token to a local file with least-privilege permissions."""
+    target = os.path.abspath(output_path)
+    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump({"refresh_token": refresh_token}, handle)
+    return target
 
 
 def main(client_secrets_path: str, scopes: List[str]) -> None:
@@ -90,9 +100,12 @@ def main(client_secrets_path: str, scopes: List[str]) -> None:
     flow.fetch_token(code=code)
     refresh_token = flow.credentials.refresh_token
 
-    print(f"\nYour refresh token is: {refresh_token}\n")
+    output_path = persist_refresh_token(refresh_token)
+    masked = f"{refresh_token[:6]}...{refresh_token[-4:]}" if refresh_token else "(missing)"
+    print(f"\nRefresh token generated: {masked}")
+    print(f"Saved securely to: {output_path}\n")
     print(
-        "Add your refresh token to your client library configuration as "
+        "Load the token from that file and add it to your client library configuration as "
         "described here: "
         "https://developers.google.com/google-ads/api/docs/client-libs/python/configuration"
     )

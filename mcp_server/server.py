@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from hmac import compare_digest
 from time import perf_counter
 from typing import Any
 import logging
@@ -55,6 +56,25 @@ class ToolInvocationRequest(BaseModel):
     customer_id: str | None = None
     vertical: str | None = None
     tool_input: dict[str, Any] = Field(default_factory=dict)
+
+
+def _to_bool(value: str | None, default: bool) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _mcp_auth_settings() -> tuple[bool, str]:
+    enabled = _to_bool(os.getenv("MCP_AUTH_ENABLED"), True)
+    token = os.getenv("MCP_AUTH_TOKEN", "").strip()
+    return enabled, token
+
+
+def _extract_request_token(request: Request) -> str:
+    authorization = str(request.headers.get("authorization", "")).strip()
+    if authorization.lower().startswith("bearer "):
+        return authorization.split(" ", 1)[1].strip()
+    return str(request.headers.get("x-api-key", "")).strip()
 
 
 def validate_outbound_response(tool_name: str, payload: Any) -> None:
@@ -121,13 +141,20 @@ def _google_ads_health() -> dict[str, Any]:
 def create_app() -> FastAPI:
     if FastAPI is None:
         raise RuntimeError("fastapi dependency is required to run the MCP server")
+    auth_enabled, auth_token = _mcp_auth_settings()
+    if auth_enabled and not auth_token:
+        raise RuntimeError("MCP_AUTH_TOKEN must be configured when MCP_AUTH_ENABLED=true")
     if os.getenv("ENV", "local").strip().lower() == "production":
         GoogleAdsAuth()
 
-    app = FastAPI(title="Ads Genie MCP Server", version="1.0.0")
+    app = FastAPI(title="Ads Genie MCP Server", version="1.0.0", docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.middleware("http")
     async def ai_firewall(request: Request, call_next):  # type: ignore[override]
+        if auth_enabled and (request.url.path == "/health" or request.url.path.startswith("/tools/")):
+            request_token = _extract_request_token(request)
+            if not request_token or not compare_digest(request_token, auth_token):
+                return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
         if request.method == "POST" and request.url.path.startswith("/tools/"):
             try:
                 body = await request.json()

@@ -6,6 +6,7 @@ import pytest
 
 from mcp_server.write_actions.add_negative_keywords import add_negative_keywords
 from mcp_server.write_actions.adjust_bids import adjust_bids
+from mcp_server.write_actions.enable_ad_group import enable_ad_group
 from mcp_server.write_actions.pause_ad_group import pause_ad_group
 from orchestration.models.autonomy_config import AutonomyPolicyViolation
 
@@ -181,3 +182,15 @@ def test_adjust_bids_clamps_to_policy_limit(account) -> None:
     assert operation.update.cpc_bid_micros == 1_100_000
     assert result.applied_change_pct == 10.0
     assert len(decision_log.records) == 2
+
+
+def test_enable_ad_group_uses_enable_policy(account) -> None:
+    with pytest.raises(KeyError):
+        enable_ad_group(
+            customer_id="123",
+            ad_group_id="789",
+            auth=FakeAuth(FakeClient()),
+            registry=FakeRegistry(account),
+            autonomy=FakeAutonomy({"pause_ad_group": {"level": "propose_and_wait"}}),
+            decision_log=FakeDecisionLog(),
+        )

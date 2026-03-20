@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from base64 import b64decode
+from hmac import compare_digest
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -25,13 +26,66 @@ from .tools import ToolEngine
 ROOT_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = ROOT_DIR / "frontend"
 
+DEFAULT_AUTONOMY_POLICY = {
+    "default": "propose_wait",
+    "action_levels": {
+        "add_negative_keywords": "propose_wait",
+        "pause_campaign": "propose_wait",
+        "adjust_bid": "propose_wait",
+        "draft_campaign": "draft_review",
+    },
+    "escalation": {"spend_anomaly_pct": 50, "roas_drop_pct": 45},
+}
+ALLOWED_AUTONOMY_LEVELS = {"propose_wait", "draft_review", "escalate"}
+
+
+def _coerce_float(value: Any, default: float, *, minimum: float, maximum: float) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, numeric))
+
+
+def _sanitize_autonomy(raw: Any) -> dict[str, Any]:
+    policy = json.loads(json.dumps(DEFAULT_AUTONOMY_POLICY))
+    if not isinstance(raw, dict):
+        return policy
+
+    candidate_default = str(raw.get("default", policy["default"])).strip().lower()
+    if candidate_default in ALLOWED_AUTONOMY_LEVELS:
+        policy["default"] = candidate_default
+
+    candidate_levels = raw.get("action_levels", {})
+    if isinstance(candidate_levels, dict):
+        for action_type in policy["action_levels"]:
+            candidate = str(candidate_levels.get(action_type, policy["action_levels"][action_type])).strip().lower()
+            if candidate in ALLOWED_AUTONOMY_LEVELS:
+                policy["action_levels"][action_type] = candidate
+
+    escalation = raw.get("escalation", {})
+    if isinstance(escalation, dict):
+        policy["escalation"]["spend_anomaly_pct"] = _coerce_float(
+            escalation.get("spend_anomaly_pct"),
+            policy["escalation"]["spend_anomaly_pct"],
+            minimum=10.0,
+            maximum=200.0,
+        )
+        policy["escalation"]["roas_drop_pct"] = _coerce_float(
+            escalation.get("roas_drop_pct"),
+            policy["escalation"]["roas_drop_pct"],
+            minimum=10.0,
+            maximum=200.0,
+        )
+    return policy
+
 
 class AppContext:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.db = Database(settings.db_path)
         self.db.init_schema()
-        self.monitor = RuntimeMonitor(self.db, service="ads-genie", environment=settings.environment)
+        self.monitor = RuntimeMonitor(self.db, service="ads-genie", environment=settings.environment, include_tracebacks=False)
         if settings.auto_seed:
             self.db.seed_demo_data()
 
@@ -84,6 +138,20 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._request_id = value
         return value
 
+    def _request_origin(self) -> str:
+        return str(self.headers.get("Origin", "")).strip()
+
+    def _is_allowed_origin(self, origin: str) -> bool:
+        return bool(origin) and origin in self.context.settings.app_allowed_origins
+
+    def _apply_cors(self) -> None:
+        origin = self._request_origin()
+        if self._is_allowed_origin(origin):
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+            self.send_header("Access-Control-Allow-Methods", "GET,POST,HEAD,OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
     def _send_json(self, status: int, payload: dict[str, Any]) -> None:
         raw = json.dumps(payload, ensure_ascii=True).encode("utf-8")
         self._response_status = status
@@ -91,9 +159,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(raw)))
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET,POST,HEAD,OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self._apply_cors()
         self.send_header("X-Request-Id", self.request_id)
         self.end_headers()
         if self.command != "HEAD":
@@ -105,6 +171,14 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(raw)))
+        if content_type.startswith("text/html"):
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+                "font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; base-uri 'none'; "
+                "frame-ancestors 'none'; object-src 'none'",
+            )
+        self._apply_cors()
         self.send_header("X-Request-Id", self.request_id)
         self.end_headers()
         if self.command != "HEAD":
@@ -131,10 +205,21 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("WWW-Authenticate", 'Basic realm="Ads Genie"')
+        self._apply_cors()
         self.send_header("X-Request-Id", self.request_id)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(json.dumps({"ok": False, "error": "Authentication required", "request_id": self.request_id}).encode("utf-8"))
+
+    def _send_auth_not_configured(self) -> None:
+        self._send_json(
+            HTTPStatus.SERVICE_UNAVAILABLE,
+            {
+                "ok": False,
+                "error": "Authentication is required but APP_AUTH_USERNAME/APP_AUTH_PASSWORD are not configured.",
+                "request_id": self.request_id,
+            },
+        )
 
     def _parse_basic_auth(self) -> tuple[str, str] | None:
         header = self.headers.get("Authorization", "")
@@ -150,24 +235,47 @@ class RequestHandler(BaseHTTPRequestHandler):
         return username, password
 
     def _auth_required(self, path: str) -> bool:
-        if not self.context.settings.auth_is_configured:
-            return False
         if path in {"/api/health", "/api/slack/interactivity"}:
             return False
-        return True
+        if path == "/api/system/events":
+            return True
+        return self.context.settings.auth_is_required
 
     def _check_auth(self, path: str) -> bool:
         if not self._auth_required(path):
             return True
+        if not self.context.settings.auth_is_configured:
+            self.context.monitor.emit(
+                "warning",
+                "auth_misconfigured",
+                "Authentication required but credentials are not configured",
+                request_id=self.request_id,
+                details={"path": path},
+            )
+            self._send_auth_not_configured()
+            return False
         creds = self._parse_basic_auth()
         if not creds:
             self.context.monitor.emit("warning", "auth_failed", "Missing auth header", request_id=self.request_id, details={"path": path})
             self._send_unauthorized()
             return False
         username, password = creds
-        if username != self.context.settings.app_auth_username or password != self.context.settings.app_auth_password:
+        if not compare_digest(username, self.context.settings.app_auth_username) or not compare_digest(password, self.context.settings.app_auth_password):
             self.context.monitor.emit("warning", "auth_failed", "Invalid credentials", request_id=self.request_id, details={"path": path, "username": username})
             self._send_unauthorized()
+            return False
+        return True
+
+    def _enforce_mutation_origin(self, path: str) -> bool:
+        if path == "/api/slack/interactivity":
+            return True
+        origin = self._request_origin()
+        sec_fetch_site = str(self.headers.get("Sec-Fetch-Site", "")).strip().lower()
+        if origin and not self._is_allowed_origin(origin):
+            self._send_json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "Origin not allowed", "request_id": self.request_id})
+            return False
+        if not origin and sec_fetch_site == "cross-site":
+            self._send_json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "Cross-site request blocked", "request_id": self.request_id})
             return False
         return True
 
@@ -268,10 +376,15 @@ class RequestHandler(BaseHTTPRequestHandler):
         self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": f"Unsupported Slack payload type: {payload_type}", "request_id": self.request_id})
 
     def do_OPTIONS(self) -> None:
+        origin = self._request_origin()
+        if origin and not self._is_allowed_origin(origin):
+            self.send_response(HTTPStatus.FORBIDDEN)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            return
         self.send_response(HTTPStatus.NO_CONTENT)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET,POST,HEAD,OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self._apply_cors()
+        self.send_header("Access-Control-Max-Age", "600")
         self.end_headers()
 
     def do_HEAD(self) -> None:
@@ -291,6 +404,8 @@ class RequestHandler(BaseHTTPRequestHandler):
         path = parsed.path
         query = parse_qs(parsed.query)
         try:
+            if method == "POST" and not self._enforce_mutation_origin(path):
+                return
             if not self._check_auth(path):
                 return
 
@@ -324,6 +439,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     "google_ads_configured": self.context.settings.has_google_ads_credentials,
                     "slack_configured": self.context.settings.has_slack_credentials,
                     "auth_configured": self.context.settings.auth_is_configured,
+                    "auth_required": self.context.settings.auth_is_required,
                     "scheduler_enabled": self.context.settings.enable_scheduler,
                     "monitor_interval_seconds": self.context.settings.monitor_interval_seconds,
                     "runtime": self._runtime_summary(),
@@ -487,19 +603,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         if path == "/api/accounts":
             try:
                 body = self._read_json_body()
-                autonomy = body.get(
-                    "autonomy",
-                    {
-                        "default": "propose_wait",
-                        "action_levels": {
-                            "add_negative_keywords": "propose_wait",
-                            "pause_campaign": "propose_wait",
-                            "adjust_bid": "propose_wait",
-                            "draft_campaign": "draft_review",
-                        },
-                        "escalation": {"spend_anomaly_pct": 50, "roas_drop_pct": 45},
-                    },
-                )
+                autonomy = _sanitize_autonomy(body.get("autonomy"))
                 account = self.context.db.create_account(
                     name=str(body["name"]),
                     customer_id=str(body["customer_id"]),
@@ -507,7 +611,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     timezone_value=str(body.get("timezone", self.context.settings.timezone)),
                     slack_channel=str(body.get("slack_channel", "")),
                     autonomy_json=json.dumps(autonomy),
-                    data_source=str(body.get("data_source", "demo")),
+                    data_source="demo",
                     google_ads_customer_name=body.get("google_ads_customer_name"),
                 )
                 self._send_json(HTTPStatus.CREATED, {"ok": True, "account": account, "request_id": self.request_id})
@@ -524,19 +628,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 customer_id = str(body["customer_id"]).strip()
                 summary = self.context.ads.describe_customer(customer_id)
                 account_name = str(body.get("name") or summary.get("descriptive_name") or f"Google Ads {customer_id}")
-                autonomy = body.get(
-                    "autonomy",
-                    {
-                        "default": "propose_wait",
-                        "action_levels": {
-                            "add_negative_keywords": "propose_wait",
-                            "pause_campaign": "propose_wait",
-                            "adjust_bid": "propose_wait",
-                            "draft_campaign": "draft_review",
-                        },
-                        "escalation": {"spend_anomaly_pct": 50, "roas_drop_pct": 45},
-                    },
-                )
+                autonomy = _sanitize_autonomy(body.get("autonomy"))
                 account = self.context.db.create_account(
                     name=account_name,
                     customer_id=customer_id,
