@@ -38,6 +38,7 @@ const state = {
 
 const el = {
   topNav: document.querySelector(".top-nav"),
+  demoModeBanner: document.getElementById("demoModeBanner"),
   shell: document.querySelector(".shell"),
   navTabs: document.querySelectorAll(".nav-tab"),
   accountRail: document.getElementById("accountRail"),
@@ -260,6 +261,19 @@ function syncNotificationTray() {
   }
 }
 
+function syncDemoModeBanner() {
+  if (!el.demoModeBanner) return;
+  const mode = String(state.health?.mode || "").toLowerCase();
+  const hasLiveAds = Boolean(state.health?.google_ads_configured);
+  const isDemoMode = mode === "demo" || !hasLiveAds;
+  el.demoModeBanner.hidden = !isDemoMode;
+  if (isDemoMode) {
+    el.demoModeBanner.textContent = hasLiveAds
+      ? "Demo mode: live execution is disabled in this environment."
+      : "Demo mode: no live Google Ads execution.";
+  }
+}
+
 function setNotificationTrayOpen(nextOpen, { focusToggle = false } = {}) {
   const normalized = Boolean(nextOpen);
   if (state.notificationTrayOpen === normalized) {
@@ -449,6 +463,7 @@ function renderTopBar() {
   el.notificationCount.textContent = String(unread);
   el.notificationCount.hidden = unread === 0;
   syncNotificationTray();
+  syncDemoModeBanner();
 }
 
 function renderAccountRail() {
