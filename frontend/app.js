@@ -2,6 +2,7 @@ const PAGE_PATHS = {
   alerts: "/alerts",
   campaigns: "/campaigns/draft",
 };
+const MAX_CONTEXT_FILE_BYTES = 1_500_000;
 
 const state = {
   health: null,
@@ -36,6 +37,7 @@ const state = {
 };
 
 const el = {
+  topNav: document.querySelector(".top-nav"),
   shell: document.querySelector(".shell"),
   navTabs: document.querySelectorAll(".nav-tab"),
   accountRail: document.getElementById("accountRail"),
@@ -221,9 +223,32 @@ function unreadNotificationCount() {
   return state.notifications.filter((item) => !state.notificationSeenAt || String(item.created_at) > state.notificationSeenAt).length;
 }
 
+function syncNavOffset() {
+  const navHeight = Math.max(el.topNav?.offsetHeight || 0, 56);
+  document.documentElement.style.setProperty("--nav-offset", `${navHeight}px`);
+}
+
+function syncShellState() {
+  el.shell?.setAttribute("data-page", state.currentPage);
+  el.navTabs.forEach((tab) => {
+    const active = tab.dataset.page === state.currentPage;
+    tab.classList.toggle("active", active);
+    if (active) {
+      tab.setAttribute("aria-current", "page");
+    } else {
+      tab.removeAttribute("aria-current");
+    }
+  });
+}
+
 function isNotificationTrayTarget(target) {
   if (!(target instanceof Element)) return false;
   return Boolean(target.closest("#notificationTray") || target.closest("#notificationToggle"));
+}
+
+function isExplainDrawerTarget(target) {
+  if (!(target instanceof Element)) return false;
+  return Boolean(target.closest("#campaignExplainDrawer") || target.closest("[data-draft-explain]"));
 }
 
 function syncNotificationTray() {
@@ -253,6 +278,7 @@ function closeNotificationTray(options = {}) {
 }
 
 function openNotificationTray() {
+  closeExplainDrawer();
   markNotificationsSeen();
   setNotificationTrayOpen(true);
 }
@@ -263,6 +289,19 @@ function toggleNotificationTray() {
     return;
   }
   openNotificationTray();
+}
+
+function closeExplainDrawer() {
+  state.explainDrawerOpen = false;
+  renderExplainDrawer();
+}
+
+function closeTransientUi() {
+  closeNotificationTray();
+  state.changeRequestOpen = false;
+  if (state.explainDrawerOpen) {
+    state.explainDrawerOpen = false;
+  }
 }
 
 function currentRoute() {
@@ -285,11 +324,9 @@ function syncRoute(replace = false) {
 }
 
 function switchPage(page, { replace = false } = {}) {
+  closeTransientUi();
   state.currentPage = page === "campaigns" ? "campaigns" : "alerts";
-  el.shell.setAttribute("data-page", state.currentPage);
-  el.navTabs.forEach((tab) => {
-    tab.classList.toggle("active", tab.dataset.page === state.currentPage);
-  });
+  syncShellState();
   syncRoute(replace);
   render();
 }
@@ -662,13 +699,16 @@ function renderDraftForm() {
   }
   el.campaignFileList.innerHTML = state.draftForm.files
     .map(
-      (file, index) => `
+      (file, index) => {
+        const safeName = escapeHtml(file.name || "context.txt");
+        return `
         <span class="file-chip">
-          <span>${file.name}</span>
+          <span>${safeName}</span>
           <small>${humanFileSize(file.size)}</small>
-          <button class="file-remove" data-file-index="${index}" aria-label="Remove ${file.name}">×</button>
+          <button class="file-remove" data-file-index="${index}" aria-label="Remove ${safeName}">×</button>
         </span>
-      `
+      `;
+      }
     )
     .join("");
 }
@@ -839,7 +879,7 @@ function renderCampaignWorkspace() {
         <div class="change-request-panel">
           <label class="field-group field-span-2">
             <span>Revision request</span>
-            <textarea id="changeRequestNote" rows="3" placeholder="Example: Make ad groups tighter around emergency terms and lower budget until QS improves.">${state.changeRequestNote || ""}</textarea>
+            <textarea id="changeRequestNote" rows="3" placeholder="Example: Make ad groups tighter around emergency terms and lower budget until QS improves.">${escapeHtml(state.changeRequestNote || "")}</textarea>
           </label>
           <div class="alert-actions">
             <button class="primary-btn" data-draft-submit-change="${draft.id}">Send revision</button>
@@ -853,6 +893,8 @@ function renderCampaignWorkspace() {
 
 function render() {
   renderTopBar();
+  syncNavOffset();
+  syncShellState();
   renderAccountRail();
   renderAlertsHeader();
   renderMetricCards();
@@ -913,8 +955,16 @@ async function ingestFiles(fileList) {
     showFlash("File limit reached.", "error");
     return;
   }
+  const oversized = nextFiles.filter((file) => Number(file.size || 0) > MAX_CONTEXT_FILE_BYTES);
+  const accepted = nextFiles.filter((file) => Number(file.size || 0) <= MAX_CONTEXT_FILE_BYTES);
+  if (oversized.length) {
+    showFlash(`Skipped ${oversized.length} file${oversized.length === 1 ? "" : "s"} over 1.5MB.`, "error");
+  }
+  if (!accepted.length) {
+    return;
+  }
   const encoded = [];
-  for (const file of nextFiles) {
+  for (const file of accepted) {
     const buffer = await file.arrayBuffer();
     encoded.push({
       name: file.name,
@@ -1107,6 +1157,7 @@ async function openNotification(item) {
     }
     switchPage("alerts");
   }
+  closeNotificationTray();
   markNotificationsSeen();
 }
 
@@ -1174,7 +1225,8 @@ function bindEvents() {
   el.notificationList.addEventListener("click", async (event) => {
     const card = event.target.closest("[data-notification-id]");
     if (!card) return;
-    const item = state.notifications.find((notification) => notification.id === card.dataset.notificationId);
+    const selectedId = String(card.dataset.notificationId || "");
+    const item = state.notifications.find((notification) => String(notification.id) === selectedId);
     if (item) await openNotification(item);
   });
 
@@ -1220,6 +1272,7 @@ function bindEvents() {
     }
     const explainButton = event.target.closest("[data-draft-explain]");
     if (explainButton) {
+      closeNotificationTray();
       state.explainDrawerOpen = true;
       renderExplainDrawer();
       return;
@@ -1237,27 +1290,38 @@ function bindEvents() {
     }
   });
   el.closeExplainDrawer.addEventListener("click", () => {
-    state.explainDrawerOpen = false;
-    renderExplainDrawer();
+    closeExplainDrawer();
   });
 
   document.addEventListener(
     "pointerdown",
     (event) => {
-      if (!state.notificationTrayOpen || isNotificationTrayTarget(event.target)) return;
-      closeNotificationTray();
+      if (state.notificationTrayOpen && !isNotificationTrayTarget(event.target)) {
+        closeNotificationTray();
+      }
+      if (state.explainDrawerOpen && !isExplainDrawerTarget(event.target)) {
+        closeExplainDrawer();
+      }
     },
     true
   );
 
   document.addEventListener("keydown", (event) => {
-    if (!state.notificationTrayOpen || event.key !== "Escape") return;
-    closeNotificationTray({ focusToggle: true });
+    if (event.key !== "Escape") return;
+    if (state.notificationTrayOpen) {
+      closeNotificationTray({ focusToggle: true });
+      return;
+    }
+    if (state.explainDrawerOpen) {
+      closeExplainDrawer();
+    }
   });
 
   window.addEventListener("popstate", async () => {
     const route = currentRoute();
+    closeTransientUi();
     state.currentPage = route.page;
+    syncShellState();
     if (route.draftId) {
       try {
         const payload = await api(`/api/campaigns/draft/${route.draftId}`);
@@ -1269,6 +1333,8 @@ function bindEvents() {
     }
     render();
   });
+
+  window.addEventListener("resize", syncNavOffset);
 }
 
 async function init() {
@@ -1286,7 +1352,8 @@ async function init() {
   }
 
   if (!state.weeklyReport) await refreshWeeklyReport(true);
-  el.shell.setAttribute("data-page", state.currentPage);
+  syncShellState();
+  syncNavOffset();
   render();
   syncRoute(true);
   syncNotificationTray();

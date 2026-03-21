@@ -15,6 +15,7 @@
   --ok-soft: rgba(79, 143, 66, 0.16);
   --glow: 0 16px 60px rgba(0, 0, 0, 0.34);
   --nav-h: 56px;
+  --nav-offset: var(--nav-h);
 }
 
 * { box-sizing: border-box; }
@@ -41,7 +42,7 @@ button, input, textarea, select { font: inherit; }
 
 .flash-host {
   position: fixed;
-  top: calc(var(--nav-h) + 10px);
+  top: calc(var(--nav-offset) + 10px);
   right: 14px;
   z-index: 70;
   display: flex;
@@ -148,22 +149,26 @@ button, input, textarea, select { font: inherit; }
   padding: 7px 16px;
   border-radius: 9px;
   border: none;
+  border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--muted);
   font-size: 0.84rem;
   font-weight: 500;
   cursor: pointer;
-  transition: background 140ms ease, color 140ms ease;
+  opacity: 0.78;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease, opacity 140ms ease;
 }
 
 .nav-tab:hover {
   color: var(--soft);
   background: rgba(255,255,255,0.05);
+  opacity: 1;
 }
 
 .nav-tab.active {
-  background: rgba(47, 120, 221, 0.18);
   color: #8bb5ff;
+  border-bottom-color: #4f8dff;
+  opacity: 1;
 }
 
 .nav-tab svg {
@@ -215,7 +220,7 @@ button, input, textarea, select { font: inherit; }
 /* ─── TWO-PANEL SHELL ─── */
 
 .shell {
-  min-height: calc(100vh - var(--nav-h));
+  min-height: calc(100vh - var(--nav-offset));
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
   gap: 14px;
@@ -238,8 +243,8 @@ button, input, textarea, select { font: inherit; }
   flex-direction: column;
   padding: 16px;
   position: sticky;
-  top: calc(var(--nav-h) + 14px);
-  max-height: calc(100vh - var(--nav-h) - 28px);
+  top: calc(var(--nav-offset) + 14px);
+  max-height: calc(100vh - var(--nav-offset) - 28px);
   overflow: hidden;
 }
 
@@ -792,7 +797,7 @@ button, input, textarea, select { font: inherit; }
   box-shadow: var(--glow);
   display: flex;
   flex-direction: column;
-  min-height: calc(100vh - var(--nav-h) - 28px);
+  min-height: calc(100vh - var(--nav-offset) - 28px);
 }
 
 .inspector-head {
@@ -957,7 +962,6 @@ button, input, textarea, select { font: inherit; }
   .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .alert-feed { max-height: none; }
   .inspector-pane { min-height: auto; }
-  .nav-tab span { display: none; }
   .system-status { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
@@ -985,6 +989,11 @@ button, input, textarea, select { font: inherit; }
   cursor: pointer;
 }
 
+.notification-toggle[aria-expanded="true"] {
+  border-color: rgba(79, 141, 255, 0.34);
+  background: rgba(47, 120, 221, 0.12);
+}
+
 .notification-icon {
   color: #8bb5ff;
   font-size: 0.82rem;
@@ -1002,10 +1011,10 @@ button, input, textarea, select { font: inherit; }
 
 .notification-tray {
   position: fixed;
-  top: calc(var(--nav-h) + 10px);
+  top: calc(var(--nav-offset) + 10px);
   right: 14px;
   width: min(380px, calc(100vw - 28px));
-  max-height: calc(100vh - var(--nav-h) - 24px);
+  max-height: calc(100vh - var(--nav-offset) - 24px);
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -1319,10 +1328,10 @@ button, input, textarea, select { font: inherit; }
 
 .drawer {
   position: fixed;
-  top: calc(var(--nav-h) + 10px);
+  top: calc(var(--nav-offset) + 10px);
   right: 14px;
   width: min(420px, calc(100vw - 28px));
-  max-height: calc(100vh - var(--nav-h) - 24px);
+  max-height: calc(100vh - var(--nav-offset) - 24px);
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -1368,7 +1377,7 @@ button, input, textarea, select { font: inherit; }
   }
 }
 
-@media (max-width: 760px) {
+@media (max-width: 768px) {
   .top-nav {
     padding: 0 12px;
     gap: 10px;

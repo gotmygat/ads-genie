@@ -16,6 +16,7 @@ This repository keeps long-form supporting material under `docs/` so the repo ro
 
 - [Project handoff](project/AI_HANDOFF.md)
 - [Task memory](project/TASKS_LEFT.md)
+- [Team roster](project/TEAM_ROSTER.md)
 - [Root changelog](../CHANGELOG.md)
 
 Use those three files together.
