@@ -492,6 +492,102 @@ function addNotification(state, item) {
   state.notifications = state.notifications.slice(0, 60);
 }
 
+function formatSettingValue(key, value) {
+  if (value === null || value === undefined || value === "") return "-";
+  if (key === "daily_budget" || key === "target_cpa") {
+    const num = Number(value);
+    if (Number.isFinite(num)) return `$${num.toFixed(num >= 100 ? 0 : 2)}`;
+  }
+  if (key === "predicted_roas") {
+    const min = Number(value && value.min);
+    const max = Number(value && value.max);
+    if (Number.isFinite(min) && Number.isFinite(max)) return `${min.toFixed(1)}-${max.toFixed(1)}x`;
+  }
+  return String(value);
+}
+
+function parseDraftChangeNote(note) {
+  const text = String(note || "").toLowerCase();
+  if (!text) return {};
+  const overrides = {};
+  const dailyMatch = text.match(/\$?\s*(\d+(?:\.\d+)?)\s*(?:\/\s*day|per\s*day|a\s*day|daily)\b/);
+  if (dailyMatch) {
+    const daily = Number(dailyMatch[1]);
+    if (Number.isFinite(daily) && daily > 0) {
+      overrides.monthly_budget = Math.round(daily * 30.4);
+    }
+  }
+  const monthlyMatch = text.match(/\$?\s*(\d+(?:\.\d+)?)\s*(?:\/\s*month|per\s*month|a\s*month|monthly)\b/);
+  if (!overrides.monthly_budget && monthlyMatch) {
+    const monthly = Number(monthlyMatch[1]);
+    if (Number.isFinite(monthly) && monthly > 0) {
+      overrides.monthly_budget = Math.round(monthly);
+    }
+  }
+  const cpaMatch = text.match(/(?:target\s*cpa|cpa)\s*(?:to|=|:)?\s*\$?\s*(\d+(?:\.\d+)?)/);
+  if (cpaMatch) {
+    const cpa = Number(cpaMatch[1]);
+    if (Number.isFinite(cpa) && cpa > 0) {
+      overrides.target_cpa = Number(cpa.toFixed(2));
+    }
+  }
+  const geoMatch = text.match(/(?:geo(?:\s*target)?|target\s*geography|location)\s*(?:to|=|:)?\s*([a-z0-9+,\-\s]{3,60})/i);
+  if (geoMatch) {
+    const geography = String(geoMatch[1]).trim().replace(/\s{2,}/g, " ");
+    if (geography.length >= 3) {
+      overrides.target_geography = geography;
+    }
+  }
+  return overrides;
+}
+
+function buildChangeSummary(previousDraft, nextDraft, note) {
+  const before = previousDraft && previousDraft.draft ? previousDraft.draft : {};
+  const after = nextDraft && nextDraft.draft ? nextDraft.draft : {};
+  const fields = [
+    { key: "daily_budget", label: "Daily budget" },
+    { key: "target_cpa", label: "Target CPA" },
+    { key: "target_geography", label: "Geo target" },
+    { key: "bid_strategy", label: "Bidding" },
+    { key: "network", label: "Network" },
+    { key: "ad_schedule", label: "Ad schedule" },
+    { key: "vertical_defaults", label: "Vertical defaults" },
+  ];
+  const items = [];
+  fields.forEach((field) => {
+    const beforeValue = before[field.key];
+    const afterValue = after[field.key];
+    if (String(beforeValue ?? "") === String(afterValue ?? "")) return;
+    items.push({
+      key: field.key,
+      label: field.label,
+      before: formatSettingValue(field.key, beforeValue),
+      after: formatSettingValue(field.key, afterValue),
+    });
+  });
+  const beforeMin = Number(before.benchmark_comparison && before.benchmark_comparison.predicted_roas_min);
+  const beforeMax = Number(before.benchmark_comparison && before.benchmark_comparison.predicted_roas_max);
+  const afterMin = Number(after.benchmark_comparison && after.benchmark_comparison.predicted_roas_min);
+  const afterMax = Number(after.benchmark_comparison && after.benchmark_comparison.predicted_roas_max);
+  if (
+    Number.isFinite(beforeMin) && Number.isFinite(beforeMax) && Number.isFinite(afterMin) && Number.isFinite(afterMax)
+    && (beforeMin !== afterMin || beforeMax !== afterMax)
+  ) {
+    items.push({
+      key: "predicted_roas",
+      label: "Predicted ROAS",
+      before: formatSettingValue("predicted_roas", { min: beforeMin, max: beforeMax }),
+      after: formatSettingValue("predicted_roas", { min: afterMin, max: afterMax }),
+    });
+  }
+  return {
+    generated_at: isoNow(),
+    instruction_note: String(note || ""),
+    item_count: items.length,
+    items,
+  };
+}
+
 function listDraftsForAccount(state, accountId) {
   return state.drafts
     .filter((draft) => Number(draft.account_id) === Number(accountId))
@@ -514,6 +610,7 @@ function createDraftFromInput(state, input, existingDraftId) {
   const normalizedGeo = String(input.target_geography || `${account.name} +25mi`).trim() || `${account.name} +25mi`;
   const normalizedBudget = Math.max(500, Number(input.monthly_budget || 3000) || 3000);
   const normalizedPrompt = String(input.prompt || "").trim();
+  const targetCpaOverride = Number(input.target_cpa_override || 0) || null;
 
   const base = {
     id: existingDraftId || state.nextDraftId++,
@@ -535,6 +632,18 @@ function createDraftFromInput(state, input, existingDraftId) {
       monthly_budget: normalizedBudget,
       files,
     }),
+    delivery: {
+      pipeline_mode: "demo_simulated",
+      destination: {
+        type: "google_ads",
+        account_name: account.name,
+        customer_id: account.customer_id,
+        live_enabled: false,
+        label: `${account.name} (${account.customer_id})`,
+      },
+    },
+    execution: null,
+    change_summary: null,
     files: files.map((file) => ({
       filename: String(file.name || "context.txt"),
       content_type: String(file.type || "application/octet-stream"),
@@ -544,6 +653,14 @@ function createDraftFromInput(state, input, existingDraftId) {
     created_at: now,
     updated_at: now,
   };
+
+  if (targetCpaOverride && Number.isFinite(targetCpaOverride)) {
+    base.draft.target_cpa = Number(targetCpaOverride.toFixed(2));
+    if (base.draft.benchmark_comparison) {
+      base.draft.benchmark_comparison.predicted_roas_min = Number(Math.max(1.1, base.draft.target_cpa / 40).toFixed(1));
+      base.draft.benchmark_comparison.predicted_roas_max = Number((base.draft.benchmark_comparison.predicted_roas_min + 1.1).toFixed(1));
+    }
+  }
 
   return base;
 }
@@ -673,6 +790,29 @@ async function handlePost(req, res, state, parts) {
     }
     draft.status = "approved";
     draft.updated_at = isoNow();
+    const account = getAccountById(state, draft.account_id);
+    const executionArn = `arn:aws:states:demo:000000000000:execution:ads-genie:draft-${draft.id}`;
+    const timelineAt = draft.updated_at;
+    draft.execution = {
+      pipeline_mode: "demo_simulated",
+      execution_arn: executionArn,
+      current_state: "simulated_complete",
+      destination: {
+        type: "google_ads",
+        account_name: account ? account.name : "Selected account",
+        customer_id: account ? account.customer_id : "",
+        live_enabled: false,
+        label: account ? `${account.name} (${account.customer_id})` : "Selected account",
+      },
+      timeline: [
+        { state: "queued", at: timelineAt, detail: "Approval captured in demo environment." },
+        { state: "running_simulation", at: timelineAt, detail: "Simulating production workflow and Google Ads push." },
+        { state: "simulated_complete", at: timelineAt, detail: "Simulation complete. No live account mutation performed." },
+      ],
+    };
+    if (draft.draft) {
+      draft.draft.status_message = "Simulation complete in demo mode. No live account mutation performed.";
+    }
     const action = {
       id: state.nextActionId++,
       alert_id: null,
@@ -696,13 +836,13 @@ async function handlePost(req, res, state, parts) {
     addNotification(state, {
       kind: "system",
       severity: "info",
-      title: "Draft submitted",
-      body: `Draft #${draft.id} has been queued for launch.`,
+      title: "Draft simulation complete",
+      body: `Draft #${draft.id} was approved and simulated against ${account ? account.customer_id : "selected account"}.`,
       account_id: draft.account_id,
       draft_id: draft.id,
     });
     ok(res, {
-      execution_arn: `arn:aws:states:demo:000000000000:execution:ads-genie:draft-${draft.id}`,
+      execution_arn: executionArn,
       draft,
     });
     return;
@@ -722,14 +862,20 @@ async function handlePost(req, res, state, parts) {
       return;
     }
     const existing = state.drafts[draftIndex];
+    const noteOverrides = parseDraftChangeNote(note);
+    const explicitMonthlyBudget = Number(body.monthly_budget || 0) || null;
+    const effectiveMonthlyBudget = explicitMonthlyBudget || noteOverrides.monthly_budget || existing.monthly_budget;
+    const effectiveTargetGeography = body.target_geography || noteOverrides.target_geography || existing.target_geography;
+    const effectiveTargetCpa = Number(body.target_cpa || 0) || noteOverrides.target_cpa || null;
     const updatedDraft = createDraftFromInput(
       state,
       {
         account_id: existing.account_id,
         prompt: body.prompt || existing.prompt_text,
         campaign_goal: body.campaign_goal || existing.campaign_goal,
-        target_geography: body.target_geography || existing.target_geography,
-        monthly_budget: body.monthly_budget || existing.monthly_budget,
+        target_geography: effectiveTargetGeography,
+        monthly_budget: effectiveMonthlyBudget,
+        target_cpa_override: effectiveTargetCpa,
         files: Array.isArray(body.files) && body.files.length ? body.files : existing.files.map((file) => ({
           name: file.filename,
           type: file.content_type,
@@ -740,6 +886,14 @@ async function handlePost(req, res, state, parts) {
       existing.id
     );
     updatedDraft.created_at = existing.created_at;
+    updatedDraft.execution = null;
+    updatedDraft.change_summary = buildChangeSummary(existing, updatedDraft, note);
+    if (updatedDraft.draft) {
+      updatedDraft.draft.status_message =
+        updatedDraft.change_summary.item_count > 0
+          ? `Simulated update applied (${updatedDraft.change_summary.item_count} setting ${updatedDraft.change_summary.item_count === 1 ? "change" : "changes"}).`
+          : "Draft regenerated from your revision request.";
+    }
     state.drafts[draftIndex] = updatedDraft;
     state.decisions.unshift({
       id: state.nextDecisionId++,
@@ -754,7 +908,10 @@ async function handlePost(req, res, state, parts) {
       kind: "draft",
       severity: "warning",
       title: "Draft updated",
-      body: `Revision applied to draft #${updatedDraft.id}.`,
+      body:
+        updatedDraft.change_summary && updatedDraft.change_summary.item_count
+          ? `Revision applied to draft #${updatedDraft.id}: ${updatedDraft.change_summary.item_count} setting ${updatedDraft.change_summary.item_count === 1 ? "change" : "changes"}.`
+          : `Revision applied to draft #${updatedDraft.id}.`,
       account_id: updatedDraft.account_id,
       draft_id: updatedDraft.id,
     });

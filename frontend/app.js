@@ -158,6 +158,65 @@ function humanFileSize(bytes) {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function extractBudgetInstruction(note) {
+  const text = String(note || "").toLowerCase();
+  if (!text) return null;
+
+  const dailyMatch = text.match(/\$?\s*(\d+(?:\.\d+)?)\s*(?:\/\s*day|per\s*day|a\s*day|daily)\b/);
+  if (dailyMatch) {
+    const daily = Number(dailyMatch[1]);
+    if (Number.isFinite(daily) && daily > 0) {
+      return {
+        cadence: "daily",
+        amount: daily,
+        monthlyBudget: Math.round(daily * 30.4),
+      };
+    }
+  }
+
+  const monthlyMatch = text.match(/\$?\s*(\d+(?:\.\d+)?)\s*(?:\/\s*month|per\s*month|a\s*month|monthly)\b/);
+  if (monthlyMatch) {
+    const monthly = Number(monthlyMatch[1]);
+    if (Number.isFinite(monthly) && monthly > 0) {
+      return {
+        cadence: "monthly",
+        amount: monthly,
+        monthlyBudget: Math.round(monthly),
+      };
+    }
+  }
+  return null;
+}
+
+function extractTargetCpaInstruction(note) {
+  const text = String(note || "").toLowerCase();
+  if (!text) return null;
+  const match = text.match(/(?:target\s*cpa|cpa)\s*(?:to|=|:)?\s*\$?\s*(\d+(?:\.\d+)?)/);
+  if (!match) return null;
+  const cpa = Number(match[1]);
+  if (!Number.isFinite(cpa) || cpa <= 0) return null;
+  return Number(cpa.toFixed(2));
+}
+
+function extractGeoInstruction(note) {
+  const text = String(note || "");
+  if (!text) return "";
+  const match = text.match(/(?:geo(?:\s*target)?|target\s*geography|location)\s*(?:to|=|:)?\s*([a-z0-9+,\-\s]{3,60})/i);
+  if (!match) return "";
+  return String(match[1]).trim().replace(/\s{2,}/g, " ");
+}
+
+function executionStateLabel(value) {
+  const stateValue = String(value || "").toLowerCase();
+  if (stateValue === "queued") return "Queued";
+  if (stateValue === "running_simulation") return "Running simulation";
+  if (stateValue === "simulated_complete") return "Simulated complete";
+  if (stateValue === "running") return "Running";
+  if (stateValue === "failed") return "Failed";
+  if (stateValue === "completed") return "Completed";
+  return stateValue ? stateValue.replaceAll("_", " ") : "Not started";
+}
+
 function timeAgo(value) {
   if (!value) return "just now";
   const diffMs = Date.now() - new Date(value).getTime();
@@ -771,6 +830,24 @@ function renderExplainDrawer() {
 function renderCampaignWorkspace() {
   const account = selectedAccount();
   const draft = state.selectedDraft;
+  const isDemoMode = String(state.health?.mode || "").toLowerCase() === "demo";
+  const execution = draft?.execution || {};
+  const destination = execution.destination || draft?.delivery?.destination || null;
+  const destinationLabel = destination?.label || (account ? `${account.name} (${account.customer_id || "no customer id"})` : "Selected account");
+  const executionTimeline = Array.isArray(execution.timeline) ? execution.timeline : [];
+  const executionCurrentState = execution.current_state || (draft?.status === "approved" ? (isDemoMode ? "simulated_complete" : "queued") : "");
+  const changeSummaryItems = Array.isArray(draft?.change_summary?.items) ? draft.change_summary.items : [];
+  const changeSummaryNote = String(draft?.change_summary?.instruction_note || "");
+  const approvedStatusText = draft?.status === "approved"
+    ? isDemoMode
+      ? `Simulation ${executionCurrentState === "simulated_complete" ? "complete" : "running"} for ${destinationLabel}. No live push occurred.`
+      : `Campaign queued for ${destinationLabel}. Awaiting production push.`
+    : (draft?.draft?.status_message || "Nothing executes until you approve");
+  const approvedButtonText = draft?.status === "approved"
+    ? isDemoMode
+      ? "Approved in demo"
+      : "Submitted for launch"
+    : "Approve & launch";
   el.campaignPageTitle.textContent = account ? `${account.name} campaign drafts` : "Draft and launch flow";
   renderDraftSelector();
   renderDraftForm();
@@ -866,6 +943,14 @@ function renderCampaignWorkspace() {
         </section>
 
         <section class="panel settings-card">
+          <p class="section-kicker">Execution destination</p>
+          <div class="settings-row"><span>Pipeline mode</span><strong>${isDemoMode ? "Simulated (demo)" : "Live"}</strong></div>
+          <div class="settings-row"><span>Target account</span><strong>${destinationLabel}</strong></div>
+          <div class="settings-row"><span>Current state</span><strong>${executionStateLabel(executionCurrentState || "not_started")}</strong></div>
+          ${execution?.execution_arn ? `<div class="note-card compact"><p>Execution ID: ${execution.execution_arn}</p></div>` : ""}
+        </section>
+
+        <section class="panel settings-card">
           <p class="section-kicker">Shared negatives applied</p>
           <div class="negatives-row">${sharedNegatives || '<span class="negative-item">None recorded yet</span>'}</div>
         </section>
@@ -875,6 +960,25 @@ function renderCampaignWorkspace() {
           <div class="negatives-row">${fileTags || '<span class="negative-item">No files attached</span>'}</div>
           <div class="context-grid">${sourceMemory || '<div class="context-pill">No stored account context</div>'}</div>
         </section>
+
+        <section class="panel settings-card">
+          <p class="section-kicker">Latest revision impact</p>
+          ${changeSummaryItems.length
+            ? `<div class="diff-list">
+                ${changeSummaryItems
+                  .map(
+                    (item) => `
+                      <div class="diff-row">
+                        <span>${item.label}</span>
+                        <small>${item.before} → ${item.after}</small>
+                      </div>
+                    `
+                  )
+                  .join("")}
+              </div>
+              ${changeSummaryNote ? `<div class="note-card compact"><p>${escapeHtml(changeSummaryNote)}</p></div>` : ""}`
+            : '<div class="empty-card">No revision delta yet. Use Request changes to see before/after setting updates.</div>'}
+        </section>
       </aside>
     </div>
 
@@ -882,14 +986,29 @@ function renderCampaignWorkspace() {
       <div class="action-bar-main">
         <div>
           <p class="section-kicker">Review status</p>
-          <strong>${draft.status === "approved" ? "Campaign queued. Awaiting production push." : "Nothing executes until you approve"}</strong>
+          <strong>${approvedStatusText}</strong>
         </div>
         <div class="alert-actions wide-actions">
-          <button class="primary-btn" data-draft-approve="${draft.id}" ${draft.status === "approved" ? "disabled" : ""}>${draft.status === "approved" ? "Submitted for launch" : "Approve & launch"}</button>
+          <button class="primary-btn" data-draft-approve="${draft.id}" ${draft.status === "approved" ? "disabled" : ""}>${approvedButtonText}</button>
           <button class="ghost-btn" data-draft-modify-toggle="${draft.id}">Request changes</button>
           <button class="ghost-btn" data-draft-explain="${draft.id}">Explain structure</button>
         </div>
       </div>
+      ${executionTimeline.length ? `
+        <div class="execution-timeline">
+          <p class="section-kicker">Execution timeline</p>
+          ${executionTimeline
+            .map(
+              (item) => `
+                <div class="execution-step">
+                  <strong>${executionStateLabel(item.state)}</strong>
+                  <span>${timeAgo(item.at)} · ${item.detail || ""}</span>
+                </div>
+              `
+            )
+            .join("")}
+        </div>
+      ` : ""}
       ${state.changeRequestOpen ? `
         <div class="change-request-panel">
           <label class="field-group field-span-2">
@@ -1044,7 +1163,8 @@ async function approveDraft(draftId) {
     state.selectedDraftId = Number(payload.draft.id);
     await Promise.all([loadDraftsForSelectedAccount(state.selectedDraftId), loadNotifications()]);
     render();
-    showFlash("Campaign queued for launch.", "success");
+    const isDemoMode = String(state.health?.mode || "").toLowerCase() === "demo";
+    showFlash(isDemoMode ? "Draft approved in demo mode. No live Google Ads push." : "Campaign queued for launch.", "success");
   } catch (error) {
     showFlash(error.message, "error");
   }
@@ -1059,6 +1179,38 @@ async function submitDraftChange(draftId) {
     return;
   }
   state.changeRequestNote = note;
+  const parsedBudget = extractBudgetInstruction(note);
+  const parsedCpa = extractTargetCpaInstruction(note);
+  const parsedGeo = extractGeoInstruction(note);
+  const currentDraftMonthly = Number(state.selectedDraft?.monthly_budget || 0) || undefined;
+  const typedMonthlyBudget = Number(state.draftForm.monthlyBudget || 0) || undefined;
+  const currentDraftGeo = String(state.selectedDraft?.target_geography || "").trim();
+  const typedGeo = String(state.draftForm.targetGeography || "").trim();
+  let monthlyBudget = typedMonthlyBudget;
+  let targetGeography = typedGeo || undefined;
+  if (parsedBudget?.monthlyBudget) {
+    const budgetUnchanged =
+      !typedMonthlyBudget
+      || !currentDraftMonthly
+      || Math.abs(typedMonthlyBudget - currentDraftMonthly) < 0.01;
+    if (budgetUnchanged) {
+      monthlyBudget = parsedBudget.monthlyBudget;
+      state.draftForm.monthlyBudget = String(parsedBudget.monthlyBudget);
+      if (el.campaignBudgetInput) {
+        el.campaignBudgetInput.value = state.draftForm.monthlyBudget;
+      }
+    }
+  }
+  if (parsedGeo) {
+    const geoUnchanged = !typedGeo || !currentDraftGeo || typedGeo === currentDraftGeo;
+    if (geoUnchanged) {
+      targetGeography = parsedGeo;
+      state.draftForm.targetGeography = parsedGeo;
+      if (el.campaignGeoInput) {
+        el.campaignGeoInput.value = parsedGeo;
+      }
+    }
+  }
   try {
     const payload = await api(`/api/campaigns/draft/${draftId}/modify`, {
       method: "POST",
@@ -1067,8 +1219,9 @@ async function submitDraftChange(draftId) {
         note,
         prompt: state.draftForm.prompt,
         campaign_goal: state.draftForm.campaignGoal,
-        target_geography: state.draftForm.targetGeography,
-        monthly_budget: Number(state.draftForm.monthlyBudget || 0) || undefined,
+        target_geography: targetGeography,
+        target_cpa: parsedCpa || undefined,
+        monthly_budget: monthlyBudget,
         files: state.draftForm.files.length ? state.draftForm.files : undefined,
       }),
     });

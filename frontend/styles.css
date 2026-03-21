@@ -1331,6 +1331,63 @@ button, input, textarea, select { font: inherit; }
   border-top: 1px solid var(--line);
 }
 
+.execution-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.execution-step {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.execution-step strong {
+  font-size: 0.86rem;
+}
+
+.execution-step span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.diff-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.diff-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.diff-row:last-child {
+  border-bottom: none;
+}
+
+.diff-row span {
+  color: var(--soft);
+  font-size: 0.84rem;
+}
+
+.diff-row small {
+  color: var(--text);
+  font-size: 0.8rem;
+}
+
 .inline-status {
   color: var(--muted);
   font-size: 0.82rem;
